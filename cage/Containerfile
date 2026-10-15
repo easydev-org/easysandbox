@@ -1,0 +1,56 @@
+# easysandbox — cage (Wayland kiosk).  ->  sandbox-cage
+#
+# A single-application kiosk compositor: it full-screens ONE app, which is
+# exactly what you want when testing that app rather than a desktop.
+ARG BASE_IMAGE=docker.io/library/debian:trixie-slim
+FROM ${BASE_IMAGE}
+
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=localhost,127.0.0.1,.svc.cluster.local,.svc,.nip.io,10.199.64.20 \
+    DEBIAN_FRONTEND=noninteractive
+
+RUN set -eux; \
+    echo "apt via ${HTTP_PROXY:-direct}"; \
+    apt-get -o Acquire::Retries=10 update; \
+    for i in 1 2 3 4 5 6; do \
+      apt-get -o Acquire::Retries=10 install -y --no-install-recommends \
+        tini cage foot zenity \
+        at-spi2-core dbus dbus-x11 libatk-adaptor \
+        xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk pipewire \
+        wtype grim wlr-randr wl-clipboard \
+        fonts-dejavu fonts-noto-cjk \
+        libgbm1 libxkbcommon0 libnss3 libgtk-3-0t64 \
+        libasound2t64 libpulse0 libx11-6 libxcb1 libxrender1 libxtst6 \
+        libxi6 libxcursor1 libxrandr2 libxcomposite1 libxdamage1 \
+        libxfixes3 libxext6 libx264-164 libxcb-xtest0 libyuv0 \
+      && break || { echo "apt retry $i"; sleep 3; }; \
+    done; \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --chmod=755 ./agent-worker /usr/local/bin/agent-worker
+COPY --chmod=755 ./easystream   /usr/local/bin/easystream
+COPY --chmod=755 ./entrypoint.sh /usr/local/bin/entrypoint.sh
+
+RUN mkdir -p /root/workspace
+
+# cage takes the kiosk app as its argument; foot is the "one app" (a terminal is
+# the most useful single app to drive).
+ENV WORKER_PORT=48080 \
+    WORKER_DB=/data/jobs.db \
+    SCREEN_GEOMETRY_WL=1024x768 \
+    DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/agent-dbus \
+    XDG_RUNTIME_DIR=/tmp/xdg \
+    XDG_CURRENT_DESKTOP=wlroots \
+    NO_AT_BRIDGE=0 \
+    AT_SPI_CLIENT=true \
+    ACCESSIBILITY_ENABLED=1 \
+    DESKTOP_KIND=wayland \
+    DESKTOP_ENV="WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1" \
+    DESKTOP_CMD="cage -- foot" \
+    DESKTOP_TERM=""
+
+EXPOSE 48080
+ENTRYPOINT ["/usr/bin/tini", "-s", "/usr/local/bin/entrypoint.sh"]
