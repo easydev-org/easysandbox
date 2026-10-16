@@ -15,6 +15,7 @@ ENV HTTP_PROXY=${HTTP_PROXY} \
 RUN set -eux; \
     echo "apt via ${HTTP_PROXY:-direct}"; \
     apt-get -o Acquire::Retries=10 update; \
+    APT_OK=0; \
     for i in 1 2 3 4 5 6; do \
       apt-get -o Acquire::Retries=10 install -y --no-install-recommends \
         tini xvfb x11-utils xdotool xclip xsel dbus-x11 \
@@ -30,12 +31,17 @@ RUN set -eux; \
         libasound2t64 libpulse0 libx11-6 libxcb1 libxrender1 libxtst6 \
         libxi6 libxcursor1 libxrandr2 libxcomposite1 libxdamage1 \
         libxfixes3 libxext6 libx264-164 libxcb-xtest0 libyuv0 libxcb-shm0 \
-      && break || { echo "apt retry $i"; sleep 3; }; \
+      && { APT_OK=1; break; } || { echo "apt retry $i"; sleep 3; }; \
     done; \
+    [ "$APT_OK" = 1 ] || { echo "APT INSTALL FAILED" >&2; exit 1; }; \
     rm -rf /var/lib/apt/lists/*
 
 COPY --chmod=755 ./agent-worker /usr/local/bin/agent-worker
 COPY --chmod=755 ./easystream   /usr/local/bin/easystream
+ARG ENTRY_HASH=0
+# The shared entrypoint is copied in; ENTRY_HASH makes this layer
+# invalidate whenever common/entrypoint.sh changes (see build.sh).
+RUN echo "entrypoint ${ENTRY_HASH}"
 COPY --chmod=755 ./entrypoint.sh /usr/local/bin/entrypoint.sh
 
 RUN mkdir -p /root/workspace

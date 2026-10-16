@@ -18,16 +18,42 @@
 set -Eeuo pipefail
 
 DESKTOP_KIND="${DESKTOP_KIND:-x11}"
+DESKTOP_ENV="${DESKTOP_ENV:-}"
+DESKTOP_CMD="${DESKTOP_CMD:-}"
+DESKTOP_TERM="${DESKTOP_TERM:-}"
+# DESKTOP_POST runs after the desktop is up (e.g. plasmashell, which needs a
+# compositor to connect to first).
+DESKTOP_POST="${DESKTOP_POST:-}"
 DISPLAY_NUM="${DISPLAY_NUM:-99}"
 GEOMETRY="${SCREEN_GEOMETRY:-1024x768x24}"
-export DISPLAY=":${DISPLAY_NUM}"
+# X11 gets a display; Wayland must NOT have one, or a session that probes for an
+# X display (gnome-session-check-accelerated, xrdb in startplasma-wayland)
+# fails on a display that does not exist.
+if [ "${DESKTOP_KIND:-x11}" = "x11" ]; then
+  export DISPLAY=":${DISPLAY_NUM}"
+  export XDG_SESSION_TYPE=x11
+else
+  # A non-wlroots Wayland compositor (kwin/mutter) starts Xwayland; easystream's
+  # X11 backend needs DISPLAY to reach it. wlroots compositors have no Xwayland
+  # by default, so there DISPLAY stays unset.
+  if [ "${DESKTOP_WLROOTS:-1}" = "1" ]; then
+    unset DISPLAY || true
+  else
+    export DISPLAY="${XWAYLAND_DISPLAY_NUM:-:0}"
+  fi
+  export XDG_SESSION_TYPE=wayland
+fi
 
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg}"
 # Do NOT export WAYLAND_DISPLAY on an X11 desktop: the easystream daemon picks
 # its backend by what is present, and a stray WAYLAND_DISPLAY made it choose the
 # Wayland backend (whose input then failed) on an Xvfb screen. The Wayland path
 # sets it from the real compositor socket in bring_up_wayland.
-if [ "${DESKTOP_KIND:-x11}" = "wayland" ]; then
+#
+# A non-wlroots Wayland compositor (kwin/mutter) also gets NO WAYLAND_DISPLAY:
+# easystream's Wayland backend needs the wlroots protocols, so it must fall back
+# to X11 (through the compositor's Xwayland).
+if [ "${DESKTOP_KIND:-x11}" = "wayland" ] && [ "${DESKTOP_WLROOTS:-1}" = "1" ]; then
   export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
 fi
 mkdir -p "$XDG_RUNTIME_DIR" "$HOME/workspace" /data
@@ -56,6 +82,20 @@ bring_up_a11y() {
   dbus-daemon --session --address="${DBUS_SESSION_BUS_ADDRESS}" \
     --fork --print-pid=4 4>/tmp/dbus.pid >/tmp/dbus.log 2>&1
   for _ in $(seq 1 50); do [ -S /tmp/agent-dbus ] && break; sleep 0.1; done
+  echo "desktop[${DESKTOP_KIND}]: session bus up"
+
+  # The SYSTEM bus: gnome-session and several KDE components refuse to start
+  # without /run/dbus/system_bus_socket ("Failed to connect to system bus").
+  # A container has none, so start one.
+  mkdir -p /run/dbus
+  if [ ! -S /run/dbus/system_bus_socket ]; then
+    # A stale pid file (e.g. baked into the image) makes dbus-daemon refuse to
+    # start ("The pid file /run/dbus/pid exists"), leaving /run/dbus empty.
+    rm -f /run/dbus/pid
+    timeout 10 dbus-daemon --system --fork --print-pid=4 4>/tmp/system-dbus.pid >/tmp/system-dbus.log 2>&1 \
+      || echo "desktop[${DESKTOP_KIND}]: system bus start failed (continuing)" >&2
+  fi
+  echo "desktop[${DESKTOP_KIND}]: system bus step done"
 
   # The bus launcher proxies org.a11y.Bus; the registry aggregates the per-app
   # trees. Then flip the Status flags on so clients see the tree.
@@ -98,16 +138,32 @@ bring_up_wayland() {
   # The compositor picks its own socket name; adopt it so agent-worker (started
   # next) and every job it spawns inherit the RIGHT WAYLAND_DISPLAY. Guessing
   # wayland-0 breaks as soon as the compositor chooses wayland-1.
-  export WAYLAND_DISPLAY="$sock"
-  echo "desktop[wayland]: WAYLAND_DISPLAY=${WAYLAND_DISPLAY}"
+  #
+  # EXCEPT for a non-wlroots compositor (kwin/mutter): easystream's Wayland
+  # backend speaks the wlroots protocols (wlr-screencopy / wlr-virtual-pointer)
+  # which those do NOT implement, so capture/input would be dead. With no
+  # WAYLAND_DISPLAY it falls back to its X11 backend, which works through the
+  # compositor's Xwayland (DESKTOP_CMD starts one).
+  if [ "${DESKTOP_WLROOTS:-1}" = "1" ]; then
+    export WAYLAND_DISPLAY="$sock"
+    echo "desktop[wayland]: WAYLAND_DISPLAY=${WAYLAND_DISPLAY}"
+  else
+    echo "desktop[wayland]: non-wlroots; easystream will use the X11 backend"
+  fi
 
   # A wlroots headless output always starts at 1280x720; wlr-randr is the only
-  # way to change it. Retry until the output exists.
+  # way to change it. Retry until the output exists. NOT every compositor speaks
+  # wlr-randr (kwin/mutter do not), so never let it block: `timeout` bounds each
+  # attempt and the loop is bounded too.
+  if [ "${DESKTOP_WLROOTS:-1}" != "1" ]; then
+    echo "desktop[wayland]: not wlroots; skipping wlr-randr"
+    return 0
+  fi
   local geom="${SCREEN_GEOMETRY_WL:-1024x768}"
-  for _ in $(seq 1 25); do
-    local out; out="$(wlr-randr 2>/dev/null | awk '/^[^ ]/{print $1; exit}')"
+  for _ in $(seq 1 15); do
+    local out; out="$(timeout -k 1 3 wlr-randr 2>/dev/null | awk '/^[^ ]/{print $1; exit}')"
     if [ -n "${out}" ]; then
-      wlr-randr --output "${out}" --custom-mode "${geom}" >/tmp/wlr-randr.log 2>&1 \
+      timeout -k 1 3 wlr-randr --output "${out}" --custom-mode "${geom}" >/tmp/wlr-randr.log 2>&1 \
         && { echo "desktop[wayland]: ${out} -> ${geom}"; break; }
     fi
     sleep 0.2
@@ -124,14 +180,46 @@ bring_up_desktop() {
     sleep 2
   else
     # Wayland: portals + pipewire for screenshot/screencast, then the terminal.
+    # Best-effort: a compositor that does not need them (kwin/mutter) must not
+    # block on them, so each is backgrounded and its failure ignored.
     pipewire >/tmp/pipewire.log 2>&1 &
     echo $! > /tmp/pipewire.pid
     sleep 1
-    XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-wlroots}" /usr/libexec/xdg-desktop-portal-wlr \
-      >/tmp/portal-wlr.log 2>&1 &
-    echo $! > /tmp/portal-wlr.pid
-    /usr/libexec/xdg-desktop-portal >/tmp/portal.log 2>&1 &
-    echo $! > /tmp/portal.pid
+    if command -v xdg-desktop-portal-wlr >/dev/null 2>&1 && [ -x /usr/libexec/xdg-desktop-portal-wlr ]; then
+      XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-wlroots}" /usr/libexec/xdg-desktop-portal-wlr \
+        >/tmp/portal-wlr.log 2>&1 &
+      echo $! > /tmp/portal-wlr.pid
+    fi
+    if [ -x /usr/libexec/xdg-desktop-portal ]; then
+      /usr/libexec/xdg-desktop-portal >/tmp/portal.log 2>&1 &
+      echo $! > /tmp/portal.pid
+    fi
+  fi
+
+  # A non-wlroots Wayland compositor does not necessarily bring up Xwayland
+  # on its own (kwin --virtual did not), and easystream's X11 backend needs it.
+  # Start it BEFORE easystream and wait for its socket.
+  if [ "${DESKTOP_KIND}" = "wayland" ] && [ "${DESKTOP_WLROOTS:-1}" != "1" ]; then
+    if ! [ -S /tmp/.X11-unix/X0 ]; then
+      # Xwayland takes no -screen (that is Xorg); its size comes from the
+      # compositor's virtual output, which we already set to 1024x768.
+      Xwayland :0 >/tmp/xwayland.log 2>&1 &
+      echo $! > /tmp/xwayland.pid
+      for _ in $(seq 1 50); do [ -S /tmp/.X11-unix/X0 ] && break; sleep 0.2; done
+    fi
+    # Xwayland comes up at 640x480; set the output to our resolution. The
+    # compositor exposes it as the mode list, so xrandr can pick it.
+    if [ -S /tmp/.X11-unix/X0 ]; then
+      for _ in $(seq 1 15); do
+        out="$(DISPLAY=:0 timeout 3 xrandr 2>/dev/null | awk '/ connected/{print $1; exit}')"
+        if [ -n "${out}" ]; then
+          DISPLAY=:0 timeout 3 xrandr --output "${out}" --mode "${GEOMETRY%x24}" >/tmp/xrandr.log 2>&1 \
+            && { echo "desktop[wayland]: Xwayland ${out} -> ${GEOMETRY%x24}"; break; }
+        fi
+        sleep 0.3
+      done
+    fi
+    echo "desktop[wayland]: Xwayland $( [ -S /tmp/.X11-unix/X0 ] && echo up || echo MISSING )"
   fi
 
   if [ -n "${DESKTOP_TERM:-}" ]; then
@@ -139,6 +227,14 @@ bring_up_desktop() {
     $DESKTOP_TERM >/tmp/term.log 2>&1 &
     echo $! > /tmp/term.pid
   fi
+
+  if [ -n "${DESKTOP_POST:-}" ]; then
+    sleep 2
+    # shellcheck disable=SC2086
+    $DESKTOP_POST >/tmp/desktop-post.log 2>&1 &
+    echo $! > /tmp/desktop-post.pid
+  fi
+
 
   # easystream: a11y/input/capture/H.264 on 127.0.0.1:48078/48079. Started after
   # the display so its backend can bind.

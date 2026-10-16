@@ -82,6 +82,9 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 cp "${FDIR}/Containerfile" "${WORK}/Dockerfile"
 cp "${DIR}/common/entrypoint.sh" "${WORK}/entrypoint.sh"
+# The shared entrypoint is copied into the build context, so buildkit can reuse
+# a stale COPY layer across builds. Bust it with the script's hash.
+ENTRY_HASH="$(sha256sum "${DIR}/common/entrypoint.sh" | cut -c1-16)"
 # Fetch the guest binaries from the releases (build time, via the proxy).
 curl -fsSL -x "${RELEASE_PROXY}" -o "${WORK}/agent-worker" \
   "${GH}/easyworker/releases/download/${WORKER_VERSION}/agent-worker-linux-amd64"
@@ -96,6 +99,7 @@ echo "Building ${NAME}:${TAG} (flavor=${FLAVOR}, buildkitd=${BUILDKIT})"
   --local "dockerfile=${WORK}" \
   --opt "filename=Dockerfile" \
   --opt "build-arg:BASE_IMAGE=${BASE_IMAGE}" \
+  --opt "build-arg:ENTRY_HASH=${ENTRY_HASH}" \
   --opt "build-arg:HTTP_PROXY=${PROXY}" \
   --opt "build-arg:HTTPS_PROXY=${PROXY}" \
   --opt "build-arg:NO_PROXY=localhost,127.0.0.1,.svc.cluster.local,.svc,.nip.io,10.199.64.20" \
