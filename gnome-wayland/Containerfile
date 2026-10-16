@@ -82,7 +82,6 @@ ENV WORKER_PORT=48080 \
     XDG_CURRENT_DESKTOP=GNOME \
     XDG_SESSION_DESKTOP=gnome \
     DESKTOP_KIND=wayland \
-    DESKTOP_WLROOTS=0 \
     DESKTOP_ENV="MUTTER_DEBUG_DUMMY_MODE_SPECS=1024x768" \
     DESKTOP_CMD="mutter --wayland --no-x11" \
     DESKTOP_POST="gnome-shell --nested --wayland" \

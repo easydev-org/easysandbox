@@ -18,7 +18,7 @@ RUN set -eux; \
     for i in 1 2 3 4 5 6; do \
       apt-get -o Acquire::Retries=10 install -y --no-install-recommends \
         tini xvfb x11-utils xdotool xclip xsel dbus-x11 \
-        plasma-workspace plasma-desktop kwin-wayland konsole dolphin zenity xwayland \
+        plasma-workspace plasma-desktop kwin-wayland konsole dolphin zenity \
         fonts-dejavu fonts-noto-cjk locales \
         at-spi2-core dbus libatk-adaptor \
         xdg-desktop-portal xdg-desktop-portal-kde xdg-desktop-portal-gtk \
@@ -65,9 +65,8 @@ ENV WORKER_PORT=48080 \
     XDG_CURRENT_DESKTOP=KDE \
     XDG_SESSION_DESKTOP=KDE \
     DESKTOP_KIND=wayland \
-    DESKTOP_WLROOTS=0 \
     DESKTOP_ENV="KWIN_DRM_DEVICES=/dev/null" \
-    DESKTOP_CMD="kwin_wayland --virtual --xwayland" \
+    DESKTOP_CMD="kwin_wayland --virtual" \
     DESKTOP_POST="plasmashell" \
     DESKTOP_TERM="konsole --title agent-worker"
 
