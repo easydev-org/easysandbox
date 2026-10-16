@@ -55,6 +55,9 @@ spec:
             - {name: SCREEN_GEOMETRY, value: "1024x768"}
             - {name: EAZYSTREAM_PORT, value: "48079"}
             - {name: EAZYSTREAM_HTTP_PORT, value: "48078"}
+            # View (read-only) is the OPEN default — no token needed. CONTROL
+            # (input + a11y actions + clipboard writes) needs this token.
+            - {name: EAZYSTREAM_CONTROL_TOKEN, value: "change-me" }
             - {name: XDG_RUNTIME_DIR, value: "/tmp/xdg"}
           ports:
             - {containerPort: 48078, name: http}
