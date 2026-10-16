@@ -40,6 +40,7 @@ case "$FLAVOR" in
   labwc)        DEFAULT_NAME=sandbox-wayland ;;
   sway)         DEFAULT_NAME=sandbox-sway ;;
   cage)         DEFAULT_NAME=sandbox-cage ;;
+  kiosk)        DEFAULT_NAME=sandbox-kiosk ;;
   niri)         DEFAULT_NAME=sandbox-niri ;;
   hyprland)     DEFAULT_NAME=sandbox-hyprland ;;
   cosmic)       DEFAULT_NAME=sandbox-cosmic ;;
@@ -81,10 +82,24 @@ BUILDCTL="${BUILDCTL:-$(command -v buildctl || echo /opt/tools/mise/installs/aqu
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 cp "${FDIR}/Containerfile" "${WORK}/Dockerfile"
-cp "${DIR}/common/entrypoint.sh" "${WORK}/entrypoint.sh"
-# The shared entrypoint is copied into the build context, so buildkit can reuse
-# a stale COPY layer across builds. Bust it with the script's hash.
-ENTRY_HASH="$(sha256sum "${DIR}/common/entrypoint.sh" | cut -c1-16)"
+# A flavor may ship its OWN entrypoint (e.g. kiosk: cage+chromium+lockdown);
+# otherwise the shared common/entrypoint.sh is used, parameterised by DESKTOP_*.
+if [ -f "${FDIR}/entrypoint.sh" ]; then
+  ENTRY_SRC="${FDIR}/entrypoint.sh"
+else
+  ENTRY_SRC="${DIR}/common/entrypoint.sh"
+fi
+cp "${ENTRY_SRC}" "${WORK}/entrypoint.sh"
+# The entrypoint is copied into the build context, so buildkit can reuse a
+# stale COPY layer across builds. Bust it with the script's hash.
+ENTRY_HASH="$(sha256sum "${ENTRY_SRC}" | cut -c1-16)"
+# A flavor may also ship extra build-context files (e.g. kiosk/chrome-policy.json).
+for f in "${FDIR}"/*; do
+  case "$(basename "$f")" in
+    Containerfile|entrypoint.sh) ;;  # handled above
+    *) cp "$f" "${WORK}/" 2>/dev/null || true ;;
+  esac
+done
 # Fetch the guest binaries from the releases (build time, via the proxy).
 curl -fsSL -x "${RELEASE_PROXY}" -o "${WORK}/agent-worker" \
   "${GH}/easyworker/releases/download/${WORKER_VERSION}/agent-worker-linux-amd64"
