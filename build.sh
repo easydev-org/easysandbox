@@ -58,7 +58,7 @@ export NO_PROXY no_proxy
 # image (no staged dist/). The desktop image bakes them in and its entrypoint
 # starts them.
 WORKER_VERSION="${WORKER_VERSION:-v0.1.0}"
-EASYSTREAM_VERSION="${EASYSTREAM_VERSION:-v0.5.2}"
+EASYSTREAM_VERSION="${EASYSTREAM_VERSION:-v0.5.3}"
 RELEASE_PROXY="${RELEASE_PROXY:-${PROXY:-http://mihomo.develop.svc.cluster.local:7890}}"
 GH="https://github.com/easydev-org"
 # The image is built FROM the generic toolchain base (build-essential etc.).

@@ -67,6 +67,7 @@ cleanup() {
        "$(cat /tmp/desktop.pid 2>/dev/null)" \
        "$(cat /tmp/term.pid 2>/dev/null)" \
        "$(cat /tmp/easystream.pid 2>/dev/null)" \
+       "$(cat /tmp/pulseaudio.pid 2>/dev/null)" \
        "$(cat /tmp/xvfb.pid 2>/dev/null)" 2>/dev/null || true
 }
 trap cleanup TERM INT
@@ -200,6 +201,43 @@ bring_up_desktop() {
 
 }
 
+
+# bring_up_audio gives the sandbox a RECORDABLE audio source.
+#
+# A container has no sound card, so the only way to have audio to capture is a
+# NULL SINK plus its monitor. PulseAudio is used for the containers on purpose:
+# its module-null-sink carries its OWN timer clock, so the sink actually RUNS
+# and produces PCM on a machine with no hardware. PipeWire's null sink does not
+# (it stays suspended with nothing to drive it) — easystream's own docs say so,
+# and audio.rs falls back to PulseAudio for exactly this reason.
+#
+# EAZYSTREAM_AUDIO_SOURCE defaults to vsink.monitor, so the sink must be named
+# vsink. Everything here is best-effort: no audio must never break the sandbox.
+bring_up_audio() {
+  command -v pulseaudio >/dev/null 2>&1 || return 0
+  command -v pactl >/dev/null 2>&1 || return 0
+
+  echo "desktop[${DESKTOP_KIND}]: pulseaudio + null sink (vsink)"
+  mkdir -p /tmp/pulse
+  pulseaudio --daemonize=no --exit-idle-time=-1 --disallow-exit \
+    --load="module-null-sink sink_name=vsink sink_properties=device.description=vsink" \
+    >/tmp/pulseaudio.log 2>&1 &
+  echo $! > /tmp/pulseaudio.pid
+
+  # Wait for the daemon, then make sure the sink exists (the --load above may
+  # race with the daemon start).
+  for _ in $(seq 1 40); do
+    pactl info >/dev/null 2>&1 && break
+    sleep 0.25
+  done
+  if ! pactl list short sinks 2>/dev/null | grep -q '^[0-9]*[[:space:]]*vsink'; then
+    pactl load-module module-null-sink sink_name=vsink \
+      sink_properties=device.description=vsink >/dev/null 2>&1 || true
+  fi
+  # Default source = the sink's monitor, so a bare `parec` also works.
+  pactl set-default-source vsink.monitor >/dev/null 2>&1 || true
+  pactl list short sinks 2>/dev/null | head -3
+}
 # bring_up_easystream starts the daemon LAST, once the display server, the
 # desktop/portals and PipeWire are all up — it captures the screen and injects
 # input, so it needs every one of them. Running it early was why kwin reported
@@ -241,6 +279,10 @@ WORKER_PID=$!
 bring_up_desktop
 
 # easystream LAST.
+# Audio before easystream: easystream opens the capture backend at startup
+# and probes it by reading a frame, so the null sink must already exist.
+bring_up_audio
+
 bring_up_easystream
 
 wait "$WORKER_PID"
