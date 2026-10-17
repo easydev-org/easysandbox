@@ -15,7 +15,7 @@ EST_HTTP_PORT="${EAZYSTREAM_HTTP_PORT:-48078}"
 SCREEN_W="${SCREEN_GEOMETRY%%x*}"
 SCREEN_H="${SCREEN_GEOMETRY##*x}"
 export EAZYSTREAM_SCREEN_W="$SCREEN_W" EAZYSTREAM_SCREEN_H="$SCREEN_H"
-KIOSK_URL="${KIOSK_URL:-about:blank}"
+export KIOSK_URL="${KIOSK_URL:-about:blank}"
 
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg}"
 export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
@@ -90,22 +90,27 @@ echo $! > /tmp/portal-wlr.pid
 echo $! > /tmp/portal.pid
 
 # --- 3. cage: the kiosk compositor (runs exactly one client) --------------
-WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 WLR_RENDERER=pixman \
-  cage -- chromium \
-    --no-sandbox \
-    --test-type \
-    --disable-gpu \
-    --force-renderer-accessibility \
-    --start-fullscreen \
-    --no-first-run \
-    --noerrdialogs \
-    --disable-infobars \
-    --disable-session-crashed-bubble \
-    --overscroll-history-navigation=0 \
-    --disable-pinch \
-    --incognito \
+# The client is a LOOP, not chromium directly: if chromium exits (e.g. the last
+# tab is closed) the loop restarts it on the kiosk URL, so the sandbox never
+# dies and always returns to the initial page.
+cat >/tmp/kiosk-app.sh <<APP
+#!/bin/sh
+while :; do
+  chromium \
+    --no-sandbox --test-type --disable-gpu \
+    --force-renderer-accessibility --start-fullscreen \
+    --no-first-run --noerrdialogs --disable-infobars \
+    --disable-session-crashed-bubble --overscroll-history-navigation=0 \
+    --disable-pinch --incognito \
     --user-data-dir=/tmp/chromium-profile \
-    "$KIOSK_URL" >/tmp/cage.log 2>&1 &
+    "\${KIOSK_URL:-about:blank}"
+  echo "kiosk: chromium exited (rc=\$?); restarting"
+  sleep 1
+done
+APP
+chmod +x /tmp/kiosk-app.sh
+WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 WLR_RENDERER=pixman \
+  cage -- /tmp/kiosk-app.sh >/tmp/cage.log 2>&1 &
 echo $! > /tmp/cage.pid
 
 # Wait for the compositor's Wayland socket.
