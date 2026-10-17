@@ -27,25 +27,18 @@ ROOT="$(cd "${DIR}/../.." && pwd)"
 # a directory (gnome/, kde/, ...) and a line to the flavor -> image table below.
 FLAVOR="${1:-${FLAVOR:-openbox}}"
 case "$FLAVOR" in
-  # X11
   openbox)      DEFAULT_NAME=sandbox-x11 ;;
   i3)           DEFAULT_NAME=sandbox-i3 ;;
   xfce4)        DEFAULT_NAME=sandbox-xfce ;;
   mate)         DEFAULT_NAME=sandbox-mate ;;
   cinnamon)     DEFAULT_NAME=sandbox-cinnamon ;;
   lxqt)         DEFAULT_NAME=sandbox-lxqt ;;
-  gnome-x11)    DEFAULT_NAME=sandbox-gnome-x11 ;;
-  kde-x11)      DEFAULT_NAME=sandbox-kde-x11 ;;
-  # Wayland
   labwc)        DEFAULT_NAME=sandbox-wayland ;;
   sway)         DEFAULT_NAME=sandbox-sway ;;
   cage)         DEFAULT_NAME=sandbox-cage ;;
   kiosk)        DEFAULT_NAME=sandbox-kiosk ;;
   niri)         DEFAULT_NAME=sandbox-niri ;;
   hyprland)     DEFAULT_NAME=sandbox-hyprland ;;
-  cosmic)       DEFAULT_NAME=sandbox-cosmic ;;
-  gnome-wayland) DEFAULT_NAME=sandbox-gnome ;;
-  kde-wayland)  DEFAULT_NAME=sandbox-kde ;;
   *) echo "unknown flavor '$FLAVOR'" >&2; exit 2 ;;
 esac
 
@@ -65,7 +58,7 @@ export NO_PROXY no_proxy
 # image (no staged dist/). The desktop image bakes them in and its entrypoint
 # starts them.
 WORKER_VERSION="${WORKER_VERSION:-v0.1.0}"
-EASYSTREAM_VERSION="${EASYSTREAM_VERSION:-v0.1.0}"
+EASYSTREAM_VERSION="${EASYSTREAM_VERSION:-v0.5.2}"
 RELEASE_PROXY="${RELEASE_PROXY:-${PROXY:-http://mihomo.develop.svc.cluster.local:7890}}"
 GH="https://github.com/easydev-org"
 # The image is built FROM the generic toolchain base (build-essential etc.).

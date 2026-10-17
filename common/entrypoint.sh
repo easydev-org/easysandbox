@@ -144,10 +144,15 @@ bring_up_wayland() {
   # kwin/mutter answer with an error rather than blocking.
   local geom="${SCREEN_GEOMETRY_WL:-1024x768}"
   for _ in $(seq 1 15); do
-    local out; out="$(timeout -k 1 3 wlr-randr 2>/dev/null | awk '/^[^ ]/{print $1; exit}')"
+    # `|| true` matters: under `set -e` a failing command substitution in an
+    # assignment EXITS THE SCRIPT. kwin/mutter do not speak wlr-randr, so it
+    # fails every time — and that killed the whole entrypoint (the container
+    # restarted in a loop).
+    local out; out="$(timeout -k 1 3 wlr-randr 2>/dev/null | awk '/^[^ ]/{print $1; exit}' || true)"
     if [ -n "${out}" ]; then
-      timeout -k 1 3 wlr-randr --output "${out}" --custom-mode "${geom}" >/tmp/wlr-randr.log 2>&1 \
-        && { echo "desktop[wayland]: ${out} -> ${geom}"; break; }
+      if timeout -k 1 3 wlr-randr --output "${out}" --custom-mode "${geom}" >/tmp/wlr-randr.log 2>&1; then
+        echo "desktop[wayland]: ${out} -> ${geom}"; break
+      fi
     fi
     sleep 0.2
   done
@@ -193,21 +198,35 @@ bring_up_desktop() {
   fi
 
 
-  # easystream: a11y/input/capture/H.264 on 127.0.0.1:48078/48079. Started after
-  # the display so its backend can bind.
+}
+
+# bring_up_easystream starts the daemon LAST, once the display server, the
+# desktop/portals and PipeWire are all up — it captures the screen and injects
+# input, so it needs every one of them. Running it early was why kwin reported
+# "Failed to connect PipeWire context" and never exposed its D-Bus interface.
+bring_up_easystream() {
   if command -v easystream >/dev/null 2>&1; then
     echo "desktop[${DESKTOP_KIND}]: easystream on :48079"
-    EAZYSTREAM_HTTP_PORT=${EAZYSTREAM_HTTP_PORT:-48078} easystream serve >/tmp/easystream.log 2>&1 &
+    # Tee the daemon output to stdout too: its stderr is where startup
+    # failures appear, and writing only to /tmp/easystream.log hid them
+    # (the container log just stopped at the line above).
+    EAZYSTREAM_HTTP_PORT=${EAZYSTREAM_HTTP_PORT:-48078} easystream serve \
+      > >(tee -a /tmp/easystream.log) 2>&1 &
     echo $! > /tmp/easystream.pid
   fi
 }
 
 if [ "$DESKTOP_KIND" = "x11" ]; then bring_up_x11; fi
-# On Wayland the compositor must exist BEFORE the worker starts: the worker (and
-# every job) inherits WAYLAND_DISPLAY, and the compositor chooses the socket
-# name. bring_up_wayland exports the real one.
-if [ "$DESKTOP_KIND" = "wayland" ]; then bring_up_wayland; fi
+# The D-Bus session (and AT-SPI) come up FIRST: the compositor needs the session
+# bus to register its own services (kwin would otherwise fail with "Not
+# connected to D-Bus server" and never expose org.kde.KWin — no D-Bus, no
+# screenshot).
 bring_up_a11y
+
+# On Wayland the compositor must exist BEFORE the worker: the worker (and every
+# job) inherits WAYLAND_DISPLAY, and the compositor chooses the socket name.
+# bring_up_wayland exports the real one.
+if [ "$DESKTOP_KIND" = "wayland" ]; then bring_up_wayland; fi
 
 # agent-worker is the PID of record (it owns the container's lifetime). It is
 # started AFTER the a11y stack so its jobs inherit a live AT-SPI session.
@@ -215,6 +234,13 @@ echo "desktop[${DESKTOP_KIND}]: agent-worker on :${WORKER_PORT:-48080}"
 GOMEMLIMIT=${GOMEMLIMIT:-768MiB} agent-worker &
 WORKER_PID=$!
 
-bring_up_desktop &
+# The desktop (WM/DE + portals + PipeWire) is brought up SYNCHRONOUSLY so that
+# easystream can be started strictly after it: easystream captures the screen
+# and injects input, so every one of those must already be up. (The worker is
+# already running in the background, so this ordering cannot delay :48080.)
+bring_up_desktop
+
+# easystream LAST.
+bring_up_easystream
 
 wait "$WORKER_PID"
