@@ -18,7 +18,7 @@ RUN set -eux; \
     APT_OK=0; \
     for i in 1 2 3 4 5 6; do \
       apt-get -o Acquire::Retries=10 install -y --no-install-recommends \
-        tini cage foot zenity \
+        tini cage foot zenity git ca-certificates \
         at-spi2-core dbus dbus-x11 libatk-adaptor \
         xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk pipewire pulseaudio pulseaudio-utils \
         wtype grim wlr-randr wl-clipboard \

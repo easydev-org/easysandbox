@@ -18,7 +18,7 @@ RUN set -eux; \
     APT_OK=0; \
     for i in 1 2 3 4 5 6; do \
       apt-get -o Acquire::Retries=10 install -y --no-install-recommends \
-        tini xvfb x11-utils xdotool xclip xsel dbus-x11 \
+        tini xvfb x11-utils xdotool xclip xsel dbus-x11 git ca-certificates \
         lxqt lxqt-session lxqt-panel qterminal openbox \
         xterm zenity \
         fonts-dejavu fonts-noto-cjk \
