@@ -142,7 +142,7 @@ done
 # Started AFTER the compositor so capture/input bind to a live Wayland socket.
 echo "kiosk: easystream est=:${EST_PORT} http=:${EST_HTTP_PORT} (screen ${SCREEN_W}x${SCREEN_H})"
 EAZYSTREAM_PORT="$EST_PORT" EAZYSTREAM_HTTP_PORT="$EST_HTTP_PORT" \
-  easystream serve >/tmp/easystream.log 2>&1 &
+  DISPLAY=:0 easystream serve >/tmp/easystream.log 2>&1 &
 EST_PID=$!
 
 echo "kiosk: desktop up"

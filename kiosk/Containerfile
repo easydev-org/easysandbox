@@ -45,6 +45,7 @@ RUN set -eux; \
         tini cage chromium \
         at-spi2-core dbus dbus-x11 libatk-adaptor \
         pulseaudio pulseaudio-utils \
+        wl-clipboard \
         xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk \
         wlr-randr \
         fonts-dejavu fonts-noto-cjk \
