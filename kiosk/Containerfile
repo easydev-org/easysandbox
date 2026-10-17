@@ -28,6 +28,9 @@ ENV HTTP_PROXY=${HTTP_PROXY} \
 # cage + chromium + the a11y/portal stack + wlroots helpers.
 # The deb822 .sources file silently dropped the `main` stanza under buildkit,
 # so we use a plain sources.list (see easysandbox#N for the same workaround).
+# Audio: PulseAudio, NOT PipeWire. In a container with no sound card PipeWire's
+# null sink never runs (it needs a driver to push it), so it captures silence;
+# PulseAudio's module-null-sink has its own timer clock and RUNS headlessly.
 RUN set -eux; \
     rm -f /etc/apt/sources.list.d/debian.sources; \
     printf 'deb http://mirrors.aliyun.com/debian trixie main contrib non-free non-free-firmware\n' \
@@ -37,10 +40,12 @@ RUN set -eux; \
     APT_OK=0; \
     for i in 1 2 3 4 5 6; do \
       apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=60 update \
+      && (apt-get purge -y pipewire pipewire-bin pipewire-pulse 2>/dev/null || true) \
       && apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=60 install -y --no-install-recommends \
         tini cage chromium \
         at-spi2-core dbus dbus-x11 libatk-adaptor \
-        xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk pipewire \
+        pulseaudio pulseaudio-utils \
+        xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk \
         wlr-randr \
         fonts-dejavu fonts-noto-cjk \
         libgbm1 libxkbcommon0 libnss3 libgtk-3-0t64 \

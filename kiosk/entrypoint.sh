@@ -29,7 +29,7 @@ cleanup() {
        "$(cat /tmp/at-spi-bus.pid 2>/dev/null)" \
        "$(cat /tmp/dbus.pid 2>/dev/null)" \
        "$(cat /tmp/cage.pid 2>/dev/null)" \
-       "$(cat /tmp/pipewire.pid 2>/dev/null)" \
+       "$(cat /tmp/pulseaudio.pid 2>/dev/null)" \
        "$(cat /tmp/portal-wlr.pid 2>/dev/null)" \
        "$(cat /tmp/portal.pid 2>/dev/null)" 2>/dev/null || true
 }
@@ -56,10 +56,34 @@ bring_up_a11y() {
 }
 bring_up_a11y
 
-# --- 2. portal stack (screenshot/screencast for a11y + computer-screenshot)
-pipewire >/tmp/pipewire.log 2>&1 &
-echo $! > /tmp/pipewire.pid
-sleep 1
+# --- 2. audio: PulseAudio + a null sink -----------------------------------
+# A container has no sound card, so we create a virtual sink. PulseAudio's
+# module-null-sink carries its OWN timer clock and therefore RUNS headlessly
+# (PipeWire's null sink stays suspended with no driver, so it captures nothing).
+# The guest's audio goes to `vsink`; easystream records `vsink.monitor`.
+mkdir -p /run/dbus
+if [ ! -S /run/dbus/system_bus_socket ]; then
+  dbus-daemon --system --fork >/tmp/system-dbus.log 2>&1 || true
+fi
+export PULSE_SERVER=unix:/var/run/pulse/native
+pulseaudio --system --disallow-exit --exit-idle-time=-1 -n \
+  --dl-search-path="$(ls -d /usr/lib/pulse-*/modules | head -1)" \
+  --load="module-null-sink sink_name=vsink" \
+  --load="module-native-protocol-unix auth-anonymous=1" \
+  >/tmp/pulseaudio.log 2>&1 &
+echo $! > /tmp/pulseaudio.pid
+sleep 2
+# Wait until the null sink actually exists (pulseaudio comes up async), so
+# easystream's one-time audio probe sees a working source.
+for _ in $(seq 1 50); do
+  if pactl list short sinks 2>/dev/null | grep -q vsink; then break; fi
+  sleep 0.2
+done
+# Make the null sink the default output so apps (chromium) play into it.
+pactl set-default-sink vsink >/dev/null 2>&1 || true
+echo "kiosk: audio sink vsink ready"
+
+# --- 3. portal stack (screenshot/screencast for a11y + computer-screenshot)
 XDG_CURRENT_DESKTOP=wlroots /usr/libexec/xdg-desktop-portal-wlr >/tmp/portal-wlr.log 2>&1 &
 echo $! > /tmp/portal-wlr.pid
 /usr/libexec/xdg-desktop-portal >/tmp/portal.log 2>&1 &
