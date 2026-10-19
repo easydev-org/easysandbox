@@ -245,10 +245,19 @@ bring_up_audio() {
 bring_up_easystream() {
   if command -v easystream >/dev/null 2>&1; then
     echo "desktop[${DESKTOP_KIND}]: easystream on :48079"
+    # Lock the daemon: control needs the token, view stays open. Default the
+    # control token to the worker's own token — the worker already drives the
+    # GUI through its ComputerService, so the same secret grants no more. With
+    # no token at all easystream runs UNAUTHENTICATED (any client = control),
+    # so a leaked :48079 could drive the guest.
+    export EAZYSTREAM_CONTROL_TOKEN="${EAZYSTREAM_CONTROL_TOKEN:-${WORKER_TOKEN:-}}"
+    export EAZYSTREAM_VIEW_TOKEN="${EAZYSTREAM_VIEW_TOKEN:-}"
     # Tee the daemon output to stdout too: its stderr is where startup
     # failures appear, and writing only to /tmp/easystream.log hid them
     # (the container log just stopped at the line above).
-    EAZYSTREAM_HTTP_PORT=${EAZYSTREAM_HTTP_PORT:-48078} easystream serve \
+    EAZYSTREAM_HTTP_PORT=${EAZYSTREAM_HTTP_PORT:-48078} \
+      EAZYSTREAM_CONTROL_TOKEN="$EAZYSTREAM_CONTROL_TOKEN" \
+      EAZYSTREAM_VIEW_TOKEN="$EAZYSTREAM_VIEW_TOKEN" easystream serve \
       > >(tee -a /tmp/easystream.log) 2>&1 &
     echo $! > /tmp/easystream.pid
   fi
