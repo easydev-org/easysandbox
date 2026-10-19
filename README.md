@@ -2,7 +2,7 @@
 
 The **Linux desktop sandbox images**: one self-contained image per desktop
 environment, each with the screen stack, the easystream daemon and the
-agent-worker baked in.
+easyworker baked in.
 
 One repository holds them all — **adding a desktop means adding a subdirectory**
 (`gnome/`, `kde/`, …) with its own `Containerfile` + `entrypoint.sh`, plus a line
@@ -27,7 +27,7 @@ Both come from GitHub **releases** at build time — nothing is vendored:
 
 | binary | from |
 |---|---|
-| `agent-worker` | `easydev-org/easyworker` release `WORKER_VERSION` |
+| `easyworker` | `easydev-org/easyworker` release `WORKER_VERSION` |
 | `easystream` | `easydev-org/easystream` release `EASYSTREAM_VERSION` |
 
 ## Build

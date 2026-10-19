@@ -1,7 +1,7 @@
 # easysandbox — openbox (X11).  ->  sandbox-x11
 #
 # A self-contained, run-only graphical sandbox: Xvfb + a window manager, the
-# easystream daemon (a11y/input/capture/H.264) and agent-worker (which streams
+# easystream daemon (a11y/input/capture/H.264) and easyworker (which streams
 # the screen). The screen is NOT served over VNC.
 #
 # The entrypoint is SHARED (common/entrypoint.sh); this file only installs the
@@ -43,7 +43,7 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 # The guest binaries, placed in the build context by build.sh from the releases.
-COPY --chmod=755 ./agent-worker /usr/local/bin/agent-worker
+COPY --chmod=755 ./easyworker /usr/local/bin/easyworker
 COPY --chmod=755 ./easystream   /usr/local/bin/easystream
 ARG ENTRY_HASH=0
 # The shared entrypoint is copied in; ENTRY_HASH makes this layer
@@ -66,7 +66,7 @@ ENV WORKER_PORT=48080 \
     ACCESSIBILITY_ENABLED=1 \
     DESKTOP_KIND=x11 \
     DESKTOP_CMD="openbox" \
-    DESKTOP_TERM="xterm -geometry 100x28+20+20 -title agent-worker"
+    DESKTOP_TERM="xterm -geometry 100x28+20+20 -title easyworker"
 
 EXPOSE 48080
 ENTRYPOINT ["/usr/bin/tini", "-s", "/usr/local/bin/entrypoint.sh"]

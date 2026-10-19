@@ -149,13 +149,13 @@ EST_PID=$!
 
 echo "kiosk: desktop up"
 
-# --- 5. agent-worker — the RPC/panel surface (:48080) ----------------------
+# --- 5. easyworker — the RPC/panel surface (:48080) ----------------------
 # kiosk shipped WITHOUT this for a while: only easystream was started, so the
 # pod served video/input but no worker RPC, and every gateway call to :48080
 # got a connection refused. It must come AFTER the desktop + easystream so its
 # jobs inherit a live display and the daemon is already listening.
-echo "kiosk: agent-worker on :${WORKER_PORT:-48080}"
-GOMEMLIMIT=${GOMEMLIMIT:-768MiB} agent-worker &
+echo "kiosk: easyworker on :${WORKER_PORT:-48080}"
+GOMEMLIMIT=${GOMEMLIMIT:-768MiB} easyworker &
 WORKER_PID=$!
 
 # The worker is the PID of record: it owns the container's lifetime, so wait on

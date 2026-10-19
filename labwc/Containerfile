@@ -37,7 +37,7 @@ RUN set -eux; \
     [ "$APT_OK" = 1 ] || { echo "APT INSTALL FAILED" >&2; exit 1; }; \
     rm -rf /var/lib/apt/lists/*
 
-COPY --chmod=755 ./agent-worker /usr/local/bin/agent-worker
+COPY --chmod=755 ./easyworker /usr/local/bin/easyworker
 COPY --chmod=755 ./easystream   /usr/local/bin/easystream
 ARG ENTRY_HASH=0
 # The shared entrypoint is copied in; ENTRY_HASH makes this layer

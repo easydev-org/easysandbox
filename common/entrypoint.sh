@@ -10,7 +10,7 @@
 #   DESKTOP_ENV="K=V K=V"        extra env for the DESKTOP_CMD (optional)
 #
 # Order matters and is the same on both kinds: the D-Bus session bus + AT-SPI2
-# MUST be up before agent-worker starts, because a job's app publishes its
+# MUST be up before easyworker starts, because a job's app publishes its
 # accessibility tree over D-Bus, and jobs inherit the worker's environment.
 #
 # The screen is served by the easystream daemon inside the guest (est:// H.264);
@@ -133,7 +133,7 @@ bring_up_wayland() {
   if [ -z "$sock" ]; then
     echo "desktop[wayland]: compositor failed" >&2; cat /tmp/desktop.log >&2 || true; return 0
   fi
-  # The compositor picks its own socket name; adopt it so agent-worker (started
+  # The compositor picks its own socket name; adopt it so easyworker (started
   # next) and every job it spawns inherit the RIGHT WAYLAND_DISPLAY. Guessing
   # wayland-0 breaks as soon as the compositor chooses wayland-1.
   export WAYLAND_DISPLAY="$sock"
@@ -275,10 +275,10 @@ bring_up_a11y
 # bring_up_wayland exports the real one.
 if [ "$DESKTOP_KIND" = "wayland" ]; then bring_up_wayland; fi
 
-# agent-worker is the PID of record (it owns the container's lifetime). It is
+# easyworker is the PID of record (it owns the container's lifetime). It is
 # started AFTER the a11y stack so its jobs inherit a live AT-SPI session.
-echo "desktop[${DESKTOP_KIND}]: agent-worker on :${WORKER_PORT:-48080}"
-GOMEMLIMIT=${GOMEMLIMIT:-768MiB} agent-worker &
+echo "desktop[${DESKTOP_KIND}]: easyworker on :${WORKER_PORT:-48080}"
+GOMEMLIMIT=${GOMEMLIMIT:-768MiB} easyworker &
 WORKER_PID=$!
 
 # The desktop (WM/DE + portals + PipeWire) is brought up SYNCHRONOUSLY so that

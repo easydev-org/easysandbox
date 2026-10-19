@@ -1,2 +1,2 @@
-# The guest binaries come from the GitHub releases of easyworker (agent-worker)
+# The guest binaries come from the GitHub releases of easyworker (easyworker)
 # and easystream (the daemon) at build time — nothing is vendored here.

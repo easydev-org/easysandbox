@@ -36,7 +36,7 @@ RUN set -eux; \
     [ "$APT_OK" = 1 ] || { echo "APT INSTALL FAILED" >&2; exit 1; }; \
     rm -rf /var/lib/apt/lists/*
 
-COPY --chmod=755 ./agent-worker /usr/local/bin/agent-worker
+COPY --chmod=755 ./easyworker /usr/local/bin/easyworker
 COPY --chmod=755 ./easystream   /usr/local/bin/easystream
 ARG ENTRY_HASH=0
 # The shared entrypoint is copied in; ENTRY_HASH makes this layer
@@ -59,7 +59,7 @@ ENV WORKER_PORT=48080 \
     DESKTOP_KIND=x11 \
     DESKTOP_ENV="XDG_CURRENT_DESKTOP=LXQt XDG_SESSION_DESKTOP=lxqt" \
     DESKTOP_CMD="sh -c 'openbox & exec lxqt-session'" \
-    DESKTOP_TERM="qterminal --title agent-worker"
+    DESKTOP_TERM="qterminal --title easyworker"
 
 EXPOSE 48080
 ENTRYPOINT ["/usr/bin/tini", "-s", "/usr/local/bin/entrypoint.sh"]

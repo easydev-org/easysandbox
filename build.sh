@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and push an agent-worker GUI sandbox image.
+# Build and push an easyworker GUI sandbox image.
 #
 #   ./agent-toolchain/desktop/build.sh openbox      # -> sandbox-x11     (Xvfb+openbox)
 #   ./agent-toolchain/desktop/build.sh labwc        # -> sandbox-wayland (labwc)
@@ -9,15 +9,15 @@
 # (`sandbox-wayland`), both tagged `debian-trixie` like the rest of the catalog.
 #
 # SELF-CONTAINED / RUN-ONLY: the image bakes the screen stack AND the
-# agent-worker binary, and its entrypoint starts both. The gateway runs only
-# `sandbox-<lang>` images (agent-worker as the sole ENTRYPOINT), so this image
+# easyworker binary, and its entrypoint starts both. The gateway runs only
+# `sandbox-<lang>` images (easyworker as the sole ENTRYPOINT), so this image
 # is NOT used as a sandbox base; deploy it as a plain Deployment
-# (abc-protocol/deploy: worker-k8s/agent-worker-desktop.yaml).
+# (abc-protocol/deploy: worker-k8s/easyworker-desktop.yaml).
 #
 # Built FROM agent-toolchain/toolchain-base, so the base build tools come along.
 #
 # Prerequisites:
-#   * dist/agent-worker-linux-amd64    (scripts/build-all.sh)
+#   * dist/easyworker-linux-amd64    (scripts/build-all.sh)
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${DIR}/../.." && pwd)"
@@ -94,11 +94,11 @@ for f in "${FDIR}"/*; do
   esac
 done
 # Fetch the guest binaries from the releases (build time, via the proxy).
-curl -fsSL -x "${RELEASE_PROXY}" -o "${WORK}/agent-worker" \
-  "${GH}/easyworker/releases/download/${WORKER_VERSION}/agent-worker-linux-amd64"
+curl -fsSL -x "${RELEASE_PROXY}" -o "${WORK}/easyworker" \
+  "${GH}/easyworker/releases/download/${WORKER_VERSION}/easyworker-linux-amd64"
 curl -fsSL -x "${RELEASE_PROXY}" -o "${WORK}/easystream" \
   "${GH}/easystream/releases/download/${EASYSTREAM_VERSION}/easystream-linux-amd64"
-chmod 755 "${WORK}/agent-worker" "${WORK}/easystream"
+chmod 755 "${WORK}/easyworker" "${WORK}/easystream"
 
 echo "Building ${NAME}:${TAG} (flavor=${FLAVOR}, buildkitd=${BUILDKIT})"
 "${BUILDCTL}" --addr "${BUILDKIT}" build \

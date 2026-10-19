@@ -35,7 +35,7 @@ RUN set -eux; \
     [ "$APT_OK" = 1 ] || { echo "APT INSTALL FAILED" >&2; exit 1; }; \
     rm -rf /var/lib/apt/lists/*
 
-COPY --chmod=755 ./agent-worker /usr/local/bin/agent-worker
+COPY --chmod=755 ./easyworker /usr/local/bin/easyworker
 COPY --chmod=755 ./easystream   /usr/local/bin/easystream
 ARG ENTRY_HASH=0
 # The shared entrypoint is copied in; ENTRY_HASH makes this layer
@@ -57,7 +57,7 @@ ENV WORKER_PORT=48080 \
     ACCESSIBILITY_ENABLED=1 \
     DESKTOP_KIND=x11 \
     DESKTOP_CMD="i3" \
-    DESKTOP_TERM="xterm -geometry 100x28+20+20 -title agent-worker"
+    DESKTOP_TERM="xterm -geometry 100x28+20+20 -title easyworker"
 
 EXPOSE 48080
 ENTRYPOINT ["/usr/bin/tini", "-s", "/usr/local/bin/entrypoint.sh"]

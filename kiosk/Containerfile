@@ -86,7 +86,7 @@ RUN set -eux; \
 COPY --chmod=644 ./chrome-policy.json /etc/chromium/policies/managed/kiosk.json
 
 # --- the guest binaries (fetched from releases by build.sh) -----------------
-COPY --chmod=755 ./agent-worker /usr/local/bin/agent-worker
+COPY --chmod=755 ./easyworker /usr/local/bin/easyworker
 COPY --chmod=755 ./easystream   /usr/local/bin/easystream
 
 # --- the kiosk entrypoint (this flavor does NOT use common/entrypoint.sh) ---
