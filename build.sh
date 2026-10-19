@@ -111,17 +111,8 @@ echo "Building ${NAME}:${TAG} (flavor=${FLAVOR}, buildkitd=${BUILDKIT})"
   --opt "build-arg:HTTP_PROXY=${PROXY}" \
   --opt "build-arg:HTTPS_PROXY=${PROXY}" \
   --opt "build-arg:NO_PROXY=localhost,127.0.0.1,.svc.cluster.local,.svc,.nip.io,10.199.64.20" \
-  --output "type=oci,dest=${WORK}/image.oci,compression=zstd" \
+  --output "type=image,name=${DEST},push=true,registry.insecure=true,compression=zstd" \
   --progress plain
 
 echo "Pushing to ${DEST}"
-mkdir -p "${WORK}/oci" && tar -xf "${WORK}/image.oci" -C "${WORK}/oci"
-skopeo copy --src-tls-verify=false --dest-tls-verify=false \
-  --dest-creds "${FORGEJO_USER:-root}:${FORGEJO_PASS:-devpassword}" \
-  "oci:${WORK}/oci" "docker://${DEST}"
-
-echo "Verifying push:"
-skopeo inspect --creds "${FORGEJO_USER:-root}:${FORGEJO_PASS:-devpassword}" \
-  --tls-verify=false "docker://${DEST}" >/dev/null 2>&1 \
-  && echo "OK ${DEST}" \
-  || echo "inspect failed for ${DEST} (image may still be present)"
+echo "pushed by buildctl: ${DEST}"
