@@ -49,8 +49,10 @@ jobs:
           - { flavour: mate,     image: sandbox-mate }
           - { flavour: cinnamon, image: sandbox-cinnamon }
           - { flavour: lxqt,     image: sandbox-lxqt }
-          - { flavour: niri,     image: sandbox-niri }
-          - { flavour: hyprland, image: sandbox-hyprland }
+          # niri and hyprland appear in build.sh's case table but have no
+          # directory yet — they are placeholders for desktops not built. Listed
+          # here they only produce "cp: cannot stat 'niri/Containerfile'".
+          # Add them when the directories exist.
     steps:
       - uses: actions/checkout@v4
 
