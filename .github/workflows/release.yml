@@ -1,0 +1,143 @@
+name: images
+
+# Build every Linux desktop sandbox image and push it to ghcr.
+#
+# These are CONTAINERS, not VMs: each flavour is a normal Debian image with an X11
+# or Wayland display stack, and the daemon is baked in as the entrypoint. There is
+# no guest disk anywhere in this repository — that is easysandbox-vm's problem.
+#
+# ONE MATRIX, ALL FLAVOURS. Adding a desktop is adding a directory and a row below;
+# build.sh already maps flavour -> image name, and the matrix mirrors that table
+# so a new directory cannot be forgotten (a flavour that exists but is not listed
+# would silently never be published).
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [main]
+    paths:
+      - "**/Containerfile"
+      - "**/entrypoint.sh"
+      - "common/**"
+      - "build.sh"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  WORKER_REPO: easydev-org/easyworker
+  EASYSTREAM_REPO: easydev-org/easystream
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { flavour: openbox,  image: sandbox-x11 }
+          - { flavour: i3,       image: sandbox-i3 }
+          - { flavour: labwc,    image: sandbox-wayland }
+          - { flavour: sway,     image: sandbox-sway }
+          - { flavour: cage,     image: sandbox-cage }
+          - { flavour: kiosk,    image: sandbox-kiosk }
+          - { flavour: xfce4,    image: sandbox-xfce }
+          - { flavour: mate,     image: sandbox-mate }
+          - { flavour: cinnamon, image: sandbox-cinnamon }
+          - { flavour: lxqt,     image: sandbox-lxqt }
+          - { flavour: niri,     image: sandbox-niri }
+          - { flavour: hyprland, image: sandbox-hyprland }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: resolve release versions
+        id: ver
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          w=$(gh release view --repo "$WORKER_REPO" --json tagName -q .tagName)
+          e=$(gh release view --repo "$EASYSTREAM_REPO" --json tagName -q .tagName)
+          echo "worker=$w easystream=$e"
+          echo "worker=$w" >> "$GITHUB_OUTPUT"
+          echo "easystream=$e" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # build.sh copies the flavour's Containerfile in as Dockerfile, picks the
+      # flavour's own entrypoint.sh or the shared common/ one, stages any extra
+      # context files, and downloads the two binaries from their releases. The
+      # staging is reproduced here because a plain `docker build` has no such step.
+      - name: stage the build context
+        env:
+          WORKER_VERSION: ${{ steps.ver.outputs.worker }}
+          EASYSTREAM_VERSION: ${{ steps.ver.outputs.easystream }}
+        run: |
+          set -euo pipefail
+          FLAVOUR="${{ matrix.flavour }}"
+          FDIR="$FLAVOUR"
+          WORK="$(mktemp -d)"
+          echo "WORK=$WORK" >> "$GITHUB_ENV"
+
+          cp "$FDIR/Containerfile" "$WORK/Dockerfile"
+
+          # A flavour may ship its own entrypoint (kiosk: cage+chromium+lockdown);
+          # otherwise the shared one, parameterised by DESKTOP_*.
+          if [ -f "$FDIR/entrypoint.sh" ]; then
+            ENTRY="$FDIR/entrypoint.sh"
+          else
+            ENTRY="common/entrypoint.sh"
+          fi
+          cp "$ENTRY" "$WORK/entrypoint.sh"
+          # The entrypoint is COPYed, so buildkit would reuse a stale layer; the
+          # Containerfile busts it with ARG ENTRY_HASH.
+          echo "ENTRY_HASH=$(sha256sum "$ENTRY" | cut -c1-16)" >> "$GITHUB_ENV"
+
+          # Extra context files a flavour ships (e.g. kiosk/chrome-policy.json).
+          for f in "$FDIR"/*; do
+            case "$(basename "$f")" in
+              Containerfile|entrypoint.sh) ;;
+              *) cp "$f" "$WORK/" 2>/dev/null || true ;;
+            esac
+          done
+
+          GH=https://github.com
+          curl -fsSL -o "$WORK/easyworker" \
+            "$GH/$WORKER_REPO/releases/download/$WORKER_VERSION/easyworker-linux-amd64"
+          curl -fsSL -o "$WORK/easystream" \
+            "$GH/$EASYSTREAM_REPO/releases/download/$EASYSTREAM_VERSION/easystream-linux-amd64"
+          chmod 755 "$WORK/easyworker" "$WORK/easystream"
+          ls -l "$WORK"
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.WORK }}
+          file: ${{ env.WORK }}/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/easydev-org/${{ matrix.image }}:${{ github.ref_name }}
+            ${{ env.REGISTRY }}/easydev-org/${{ matrix.image }}:latest
+          build-args: |
+            ENTRY_HASH=${{ env.ENTRY_HASH }}
+
+      # The image is only useful if the daemon is inside it and the entrypoint is
+      # the thing that runs. Both are cheap to check and expensive to discover in a
+      # cluster.
+      - name: verify the image
+        run: |
+          set -euo pipefail
+          IMG="${{ env.REGISTRY }}/easydev-org/${{ matrix.image }}:latest"
+          docker run --rm --entrypoint sh "$IMG" -c \
+            'test -x /usr/local/bin/easyworker && test -x /usr/local/bin/easystream \
+             && echo "binaries present"'
+          docker inspect -f '{{.Config.Entrypoint}}' "$IMG"
