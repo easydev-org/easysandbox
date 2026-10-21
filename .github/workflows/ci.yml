@@ -1,0 +1,130 @@
+name: ci
+
+# Build the images on main and on every pull request, so a broken image is caught
+# BEFORE it is tagged.
+#
+# This is the same job as release.yml, minus the release: release.yml is tag-only
+# because `branches` and `tags` cannot both be push triggers in one workflow
+# (defining one suppresses the other). Splitting them is the only way to get both
+# "verify on PR" and "publish on tag".
+#
+# Images are pushed to ghcr with a `pr-<n>` / `main-<sha>` tag so the build is not
+# purely theoretical: a build that only runs `docker build` locally never exercises
+# the registry handoff, which is where the large-layer failures actually happened.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/Containerfile"
+      - "**/entrypoint.sh"
+      - "common/**"
+      - "build.sh"
+      - ".github/workflows/ci.yml"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  WORKER_REPO: easydev-org/easyworker
+  EASYSTREAM_REPO: easydev-org/easystream
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { flavour: openbox,  image: sandbox-x11 }
+          - { flavour: i3,       image: sandbox-i3 }
+          - { flavour: labwc,    image: sandbox-wayland }
+          - { flavour: sway,     image: sandbox-sway }
+          - { flavour: cage,     image: sandbox-cage }
+          - { flavour: xfce4,    image: sandbox-xfce }
+          - { flavour: cinnamon, image: sandbox-cinnamon }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: resolve release versions
+        id: ver
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          w=$(gh release view --repo "$WORKER_REPO" --json tagName -q .tagName)
+          e=$(gh release view --repo "$EASYSTREAM_REPO" --json tagName -q .tagName)
+          echo "worker=$w" >> "$GITHUB_OUTPUT"
+          echo "easystream=$e" >> "$GITHUB_OUTPUT"
+          echo "worker=$w easystream=$e"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # build.sh's staging, reproduced: the flavour's Containerfile becomes
+      # Dockerfile, its own entrypoint wins over common/, and the two binaries come
+      # from their releases.
+      - name: stage the build context
+        env:
+          WORKER_VERSION: ${{ steps.ver.outputs.worker }}
+          EASYSTREAM_VERSION: ${{ steps.ver.outputs.easystream }}
+        run: |
+          set -euo pipefail
+          FDIR="${{ matrix.flavour }}"
+          WORK="$(mktemp -d)"
+          echo "WORK=$WORK" >> "$GITHUB_ENV"
+          cp "$FDIR/Containerfile" "$WORK/Dockerfile"
+          if [ -f "$FDIR/entrypoint.sh" ]; then ENTRY="$FDIR/entrypoint.sh"
+          else ENTRY="common/entrypoint.sh"; fi
+          cp "$ENTRY" "$WORK/entrypoint.sh"
+          echo "ENTRY_HASH=$(sha256sum "$ENTRY" | cut -c1-16)" >> "$GITHUB_ENV"
+          for f in "$FDIR"/*; do
+            case "$(basename "$f")" in
+              Containerfile|entrypoint.sh) ;;
+              *) cp "$f" "$WORK/" 2>/dev/null || true ;;
+            esac
+          done
+          GH=https://github.com
+          curl -fsSL -o "$WORK/easyworker" \
+            "$GH/$WORKER_REPO/releases/download/$WORKER_VERSION/easyworker-linux-amd64"
+          curl -fsSL -o "$WORK/easystream" \
+            "$GH/$EASYSTREAM_REPO/releases/download/$EASYSTREAM_VERSION/easystream-linux-amd64"
+          chmod 755 "$WORK/easyworker" "$WORK/easystream"
+          ls -l "$WORK"
+
+      # A throwaway tag per run: the point is to exercise the push path (where the
+      # large-layer problems live), not to publish under a name anyone depends on.
+      - name: decide the tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "tag=pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=main-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.WORK }}
+          file: ${{ env.WORK }}/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/easydev-org/${{ matrix.image }}:${{ steps.tag.outputs.tag }}
+          build-args: |
+            ENTRY_HASH=${{ env.ENTRY_HASH }}
+
+      - name: verify the image
+        run: |
+          set -euo pipefail
+          IMG="${{ env.REGISTRY }}/easydev-org/${{ matrix.image }}:${{ steps.tag.outputs.tag }}"
+          docker run --rm --entrypoint sh "$IMG" -c \
+            'test -x /usr/local/bin/easyworker && test -x /usr/local/bin/easystream \
+             && echo "binaries present"'
