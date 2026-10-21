@@ -12,18 +12,11 @@ name: images
 # would silently never be published).
 
 on:
+  # TAGS ONLY. `branches` and `tags` are mutually exclusive as triggers: defining
+  # `branches` suppresses tag events entirely, so a workflow that wants both has
+  # to be two workflows. This one cuts releases; ci.yml builds on main and PRs.
   push:
     tags: ["v*"]
-    # A second, SEPARATE entry: tags and branches/paths in the
-    # same entry are ANDed, so a tag push (which has no branch)
-    # would build nothing.
-    branches: [main]
-    paths:
-      - "**/Containerfile"
-      - "**/entrypoint.sh"
-      - "common/**"
-      - "build.sh"
-      - ".github/workflows/release.yml"
   workflow_dispatch:
 
 permissions:
