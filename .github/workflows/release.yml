@@ -14,6 +14,9 @@ name: images
 on:
   push:
     tags: ["v*"]
+    # A second, SEPARATE entry: tags and branches/paths in the
+    # same entry are ANDed, so a tag push (which has no branch)
+    # would build nothing.
     branches: [main]
     paths:
       - "**/Containerfile"
