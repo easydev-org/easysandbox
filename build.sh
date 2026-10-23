@@ -86,6 +86,9 @@ cp "${ENTRY_SRC}" "${WORK}/entrypoint.sh"
 # The entrypoint is copied into the build context, so buildkit can reuse a
 # stale COPY layer across builds. Bust it with the script's hash.
 ENTRY_HASH="$(sha256sum "${ENTRY_SRC}" | cut -c1-16)"
+# Content hash of both binaries: their COPY layers are keyed only on the file
+# names, so a new release would otherwise be silently reused from cache.
+BIN_HASH="$(cat "${WORK}/easyworker" "${WORK}/easystream" 2>/dev/null | sha256sum | cut -c1-16)"
 # A flavor may also ship extra build-context files (e.g. kiosk/chrome-policy.json).
 for f in "${FDIR}"/*; do
   case "$(basename "$f")" in
@@ -108,6 +111,7 @@ echo "Building ${NAME}:${TAG} (flavor=${FLAVOR}, buildkitd=${BUILDKIT})"
   --opt "filename=Dockerfile" \
   --opt "build-arg:BASE_IMAGE=${BASE_IMAGE}" \
   --opt "build-arg:ENTRY_HASH=${ENTRY_HASH}" \
+  --opt "build-arg:BIN_HASH=${BIN_HASH}" \
   --opt "build-arg:HTTP_PROXY=${PROXY}" \
   --opt "build-arg:HTTPS_PROXY=${PROXY}" \
   --opt "build-arg:NO_PROXY=localhost,127.0.0.1,.svc.cluster.local,.svc,.nip.io,10.199.64.20" \

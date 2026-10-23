@@ -86,6 +86,12 @@ RUN set -eux; \
 COPY --chmod=644 ./chrome-policy.json /etc/chromium/policies/managed/kiosk.json
 
 # --- the guest binaries (fetched from releases by build.sh) -----------------
+# BIN_HASH busts these COPY layers on CONTENT. BuildKit keys a COPY on its
+# arguments (the two paths), so a new release landing at the same paths would
+# otherwise reuse the layer from the first build forever - a rebuilt image whose
+# daemon is still weeks old.
+ARG BIN_HASH=0
+RUN echo "binaries "
 COPY --chmod=755 ./easyworker /usr/local/bin/easyworker
 COPY --chmod=755 ./easystream   /usr/local/bin/easystream
 

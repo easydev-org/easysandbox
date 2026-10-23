@@ -108,6 +108,10 @@ jobs:
           curl -fsSL -o "$WORK/easystream" \
             "$GH/$EASYSTREAM_REPO/releases/download/$EASYSTREAM_VERSION/easystream-linux-amd64"
           chmod 755 "$WORK/easyworker" "$WORK/easystream"
+          # Bust the binary COPY layers on content: their only build arguments
+          # are the file names, so without this a new release was silently
+          # ignored and the image kept shipping the daemon from the first build.
+          echo "BIN_HASH=$(cat "$WORK/easyworker" "$WORK/easystream" | sha256sum | cut -c1-16)" >> "$GITHUB_ENV"
           ls -l "$WORK"
 
       - uses: docker/build-push-action@v6
@@ -120,6 +124,7 @@ jobs:
             ${{ env.REGISTRY }}/easydev-org/${{ matrix.image }}:latest
           build-args: |
             ENTRY_HASH=${{ env.ENTRY_HASH }}
+            BIN_HASH=${{ env.BIN_HASH }}
 
       # The image is only useful if the daemon is inside it and the entrypoint is
       # the thing that runs. Both are cheap to check and expensive to discover in a
