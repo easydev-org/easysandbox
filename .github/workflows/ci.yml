@@ -201,30 +201,48 @@ jobs:
             --shm-size=1g \
             -p 48079:48079 -p 48080:48080 \
             "$IMG"
-          # A short settle, not a full wait: the next step polls the daemon until
-          # the accessibility bus has something in it, which is the real readiness
-          # signal and costs nothing for the fast desktops.
-          sleep 5
+          # No fixed settle: the next step polls /health until the daemon answers,
+          # which is the only reliable readiness signal. The entrypoint starts
+          # six things before easystream, and the order is not ours to predict.
+          sleep 1
           docker ps -a
           docker logs sb 2>&1 | tail -40
 
       - name: daemon is up
         run: |
           set -euo pipefail
-          # These two do not touch the a11y backend, so they answer even when the
-          # accessibility bus is unreachable - a constant and a value that
-          # probe.rs decided once at startup. Run them FIRST: if the desktop is
-          # the problem, the failure should be in the desktop step with the
-          # daemon's own view of the session printed above it.
+          # /health and /capabilities never touch the a11y backend: one is a
+          # constant, the other is a value probe.rs decided once at startup. They
+          # must answer even when the desktop is the problem, so they run first.
           API="http://127.0.0.1:48079"
-          echo "--- /health ---"
-          curl -fsS --max-time 10 "$API/health"; echo
+
+          # Poll for the listener rather than sleeping a fixed time. The
+          # entrypoint starts Xvfb, the session bus, the system bus step, at-spi2,
+          # easyworker and the desktop composer BEFORE easystream, so at 5s the
+          # port is simply not open yet - and a closed port comes back as
+          # 'Connection reset by peer', which reads like a crash and means 'too
+          # early'.
+          up=0
+          for i in $(seq 1 90); do
+            if curl -fsS --max-time 3 "$API/health" -o /tmp/h 2>/dev/null; then
+              echo "daemon listening after ${i}s: $(cat /tmp/h)"
+              up=1
+              break
+            fi
+            sleep 1
+          done
+          [ "$up" = 1 ] || {
+            echo "daemon never listened on 48079" >&2
+            docker logs sb 2>&1 | tail -40
+            exit 1
+          }
+
           echo "--- /capabilities ---"
-          curl -fsS --max-time 10 "$API/capabilities" | tee /tmp/caps
-          echo
-          # capabilities must at least name a session; without that the daemon has
-          # no display and nothing else can work.
-          grep -qiE '"(Session|session)"' /tmp/caps             || { echo "capabilities names no session: $cat /tmp/caps" >&2; exit 1; }
+          curl -fsS --max-time 10 "$API/capabilities" | tee /tmp/caps; echo
+          # capabilities must name a session; without one the daemon has no
+          # display and nothing further can work.
+          grep -qiE '"(Session|session)"' /tmp/caps \
+            || { echo "capabilities names no session" >&2; cat /tmp/caps; exit 1; }
 
       - name: wait for the session
         run: |
