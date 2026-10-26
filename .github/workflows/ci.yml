@@ -234,7 +234,14 @@ jobs:
             sleep 2
           done
           echo "a11y bus never produced an app list" >&2
-          docker logs sb 2>&1 | tail -40
+          echo "=== what the container thinks it should run ==="
+          docker exec sb sh -c 'echo "DESKTOP_KIND=$DESKTOP_KIND"; echo "DESKTOP_CMD=$DESKTOP_CMD"; echo "DESKTOP_TERM=$DESKTOP_TERM"' 2>&1 || true
+          echo "=== terminal log ==="
+          docker exec sb sh -c 'cat /tmp/term.log 2>&1 || echo "no /tmp/term.log"' 2>&1 || true
+          echo "=== is anything on the X display ==="
+          docker exec sb sh -c 'DISPLAY=:99 xdotool search --name . 2>&1 | head; DISPLAY=:99 xwininfo -root -children 2>&1 | head -20' 2>&1 || true
+          echo "=== full container log ==="
+          docker logs sb 2>&1 | tail -60
           exit 1
 
       - name: screenshot and inspect
