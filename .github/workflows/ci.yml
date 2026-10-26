@@ -199,13 +199,43 @@ jobs:
           IMG="${{ env.REGISTRY }}/easydev-org/${{ matrix.image }}:${{ needs.base.outputs.tag }}"
           docker run -d --name sb \
             --shm-size=1g \
-            -p 48079:48079 \
+            -p 48079:48079 -p 48080:48080 \
             "$IMG"
-          # The entrypoint starts the compositor/Xvfb, then easystream, then
-          # easyworker. Give it time to settle - cinnamon and xfce are slow.
-          sleep 25
+          # A short settle, not a full wait: the next step polls the daemon until
+          # the accessibility bus has something in it, which is the real readiness
+          # signal and costs nothing for the fast desktops.
+          sleep 5
           docker ps -a
           docker logs sb 2>&1 | tail -40
+
+      - name: wait for the session
+        run: |
+          set -euo pipefail
+          # Poll /a11y/apps until it names something, instead of sleeping a fixed
+          # 25 seconds. cinnamon and xfce4 take far longer to register with the
+          # accessibility bus than openbox does, and a fixed wait is either too
+          # short for them or wasted time for the rest.
+          #
+          # This is not just politeness. easystream's a11y_route does
+          #
+          #   if guard.is_none() { *guard = Some(Backend::open()?); }
+          #
+          # so when the backend cannot open, the `?` propagates out of the handler
+          # and the connection is closed with NO http response at all - curl exits
+          # 56 ('failure receiving data'). An unreachable a11y bus therefore looks
+          # like a broken network call rather than a desktop still starting.
+          API="http://127.0.0.1:48079"
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 5 "$API/a11y/apps" -o /tmp/apps 2>/dev/null && [ -s /tmp/apps ]; then
+              echo "a11y bus ready after ${i}0% of the budget"
+              cat /tmp/apps
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "a11y bus never produced an app list" >&2
+          docker logs sb 2>&1 | tail -40
+          exit 1
 
       - name: screenshot and inspect
         run: |
