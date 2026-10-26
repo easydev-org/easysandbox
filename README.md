@@ -5,18 +5,55 @@ environment, each with the screen stack, the easystream daemon and the
 easyworker baked in.
 
 One repository holds them all — **adding a desktop means adding a subdirectory**
-(`gnome/`, `kde/`, …) with its own `Containerfile` + `entrypoint.sh`, plus a line
-in the flavor → image table in `build.sh`.
+with its own `Containerfile`, plus a line in the flavor → image table in
+`build.sh` and in the two workflow matrices.
+
+Seven flavors, four X11 and three Wayland:
 
 ```
-build.sh          build + push any flavor (fetches the guest binaries)
+                 X11
 openbox/          Xvfb + openbox        -> sandbox-x11
+i3/               Xvfb + i3             -> sandbox-i3
+cinnamon/         Xvfb + cinnamon       -> sandbox-cinnamon
+xfce4/            Xvfb + xfce4          -> sandbox-xfce
+
+                 Wayland
 labwc/            labwc (wlroots)       -> sandbox-wayland
+sway/             sway (wlroots)        -> sandbox-sway
 cage/             cage + foot           -> sandbox-cage   (single-app kiosk)
-kiosk/            cage + chromium       -> sandbox-kiosk  (LOCKED-DOWN browser)
-                  gnome/ (planned)      -> sandbox-gnome
-                  kde/   (planned)      -> sandbox-kde
 ```
+
+The X11 half is not a preference: i3, openbox, cinnamon and xfce4 have no
+Wayland session of their own. The Wayland half is wlroots, which drives
+`wlr-virtual-pointer` and `wlr-screencopy` directly.
+
+## Two stages
+
+Every flavor is built as **two images**, because the halves move at different
+speeds:
+
+```
+stage 1   <flavor>/Containerfile        debian + apt desktop + entrypoint
+          -> sandbox-base-<flavor>      expensive (minutes), changes rarely
+
+stage 2   Containerfile.worker          FROM that base
+          -> sandbox-<flavor>           + easyworker + easystream
+                                        cheap (one COPY), changes often
+```
+
+The desktop is not a build-time dependency of the two binaries, and the two
+binaries are separate GitHub releases on their own cadence. Keeping them in the
+base meant every daemon bump paid for a full apt run across seven desktops.
+Now it is a layer.
+
+```sh
+./build.sh --stage base   openbox     # -> sandbox-base-x11
+./build.sh --stage worker openbox     # -> sandbox-x11, on top of that base
+./build.sh                openbox     # both (STAGE=all)
+```
+
+`STAGE=worker` against a base you already trust is the normal case: "give me
+the image we ship, with today's easyworker".
 
 The other OSes live in their own repos: `easysandbox-windows`,
 `easysandbox-macos`, `easysandbox-android`.

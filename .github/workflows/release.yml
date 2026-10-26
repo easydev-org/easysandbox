@@ -1,20 +1,30 @@
 name: images
 
-# Build every Linux desktop sandbox image and push it to ghcr.
+# Publish every Linux desktop sandbox image to ghcr.
 #
-# These are CONTAINERS, not VMs: each flavour is a normal Debian image with an X11
-# or Wayland display stack, and the daemon is baked in as the entrypoint. There is
-# no guest disk anywhere in this repository — that is easysandbox-vm's problem.
+# These are CONTAINERS, not VMs: each flavour is a Debian image with an X11 or
+# Wayland display stack, and the daemon is baked in as the entrypoint. There is
+# no guest disk anywhere in this repository - that is easysandbox-vm's problem.
 #
-# ONE MATRIX, ALL FLAVOURS. Adding a desktop is adding a directory and a row below;
-# build.sh already maps flavour -> image name, and the matrix mirrors that table
-# so a new directory cannot be forgotten (a flavour that exists but is not listed
-# would silently never be published).
+# TWO STAGES, on purpose:
+#
+#   base    debian + apt desktop + entrypoint   -> sandbox-base-<flavour>
+#   worker  FROM base + easyworker + easystream -> sandbox-<flavour>
+#
+# The halves move at different speeds. A desktop changes when a package or the
+# entrypoint does; the two binaries come from their own releases, many times a
+# day. Publishing them separately means a daemon bump republishes one cheap
+# layer instead of re-running apt for seven desktops.
+#
+# Both stages are released, and both are tagged with the git tag and `latest`.
+# A consumer that wants "the desktop we trust, with today's easyworker" pulls
+# sandbox-base-<flavour> and applies Containerfile.worker itself - that is the
+# same thing this workflow does in its worker job.
 
 on:
-  # TAGS ONLY. `branches` and `tags` are mutually exclusive as triggers: defining
-  # `branches` suppresses tag events entirely, so a workflow that wants both has
-  # to be two workflows. This one cuts releases; ci.yml builds on main and PRs.
+  # TAGS ONLY. `branches` and `tags` are mutually exclusive as triggers:
+  # defining `branches` suppresses tag events entirely, so a workflow that wants
+  # both has to be two files. This one cuts releases; ci.yml builds on main/PRs.
   push:
     tags: ["v*"]
   workflow_dispatch:
@@ -29,19 +39,79 @@ env:
   EASYSTREAM_REPO: easydev-org/easystream
 
 jobs:
-  build:
+  base:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { flavour: openbox,  image: sandbox-x11 }
-          - { flavour: i3,       image: sandbox-i3 }
-          - { flavour: labwc,    image: sandbox-wayland }
-          - { flavour: sway,     image: sandbox-sway }
-          - { flavour: cage,     image: sandbox-cage }
-          - { flavour: xfce4,    image: sandbox-xfce }
-          - { flavour: cinnamon, image: sandbox-cinnamon }
+          # X11: the desktops with no Wayland session of their own.
+          - { flavour: openbox,  image: sandbox-x11,      base: x11 }
+          - { flavour: i3,       image: sandbox-i3,       base: i3 }
+          - { flavour: cinnamon, image: sandbox-cinnamon, base: cinnamon }
+          - { flavour: xfce4,    image: sandbox-xfce,     base: xfce }
+          # Wayland: wlroots.
+          - { flavour: labwc,    image: sandbox-wayland,  base: wayland }
+          - { flavour: sway,     image: sandbox-sway,     base: sway }
+          - { flavour: cage,     image: sandbox-cage,     base: cage }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The flavour's Containerfile becomes Dockerfile and the shared entrypoint
+      # lands beside it. No guest binaries: those are stage 2.
+      - name: stage the base context
+        run: |
+          set -euo pipefail
+          FDIR="${{ matrix.flavour }}"
+          WORK="$(mktemp -d)"
+          echo "WORK=$WORK" >> "$GITHUB_ENV"
+          cp "$FDIR/Containerfile" "$WORK/Dockerfile"
+          if [ -f "$FDIR/entrypoint.sh" ]; then ENTRY="$FDIR/entrypoint.sh"
+          else ENTRY="common/entrypoint.sh"; fi
+          cp "$ENTRY" "$WORK/entrypoint.sh"
+          # ARG ENTRY_HASH busts the COPY layer when the script changes.
+          echo "ENTRY_HASH=$(sha256sum "$ENTRY" | cut -c1-16)" >> "$GITHUB_ENV"
+          for f in "$FDIR"/*; do
+            case "$(basename "$f")" in
+              Containerfile|entrypoint.sh) ;;
+              *) cp "$f" "$WORK/" 2>/dev/null || true ;;
+            esac
+          done
+          ls -l "$WORK"
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.WORK }}
+          file: ${{ env.WORK }}/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/easydev-org/sandbox-base-${{ matrix.base }}:${{ github.ref_name }}
+            ${{ env.REGISTRY }}/easydev-org/sandbox-base-${{ matrix.base }}:latest
+          build-args: |
+            ENTRY_HASH=${{ env.ENTRY_HASH }}
+
+  worker:
+    needs: base
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { flavour: openbox,  image: sandbox-x11,      base: x11 }
+          - { flavour: i3,       image: sandbox-i3,       base: i3 }
+          - { flavour: cinnamon, image: sandbox-cinnamon, base: cinnamon }
+          - { flavour: xfce4,    image: sandbox-xfce,     base: xfce }
+          - { flavour: labwc,    image: sandbox-wayland,  base: wayland }
+          - { flavour: sway,     image: sandbox-sway,     base: sway }
+          - { flavour: cage,     image: sandbox-cage,     base: cage }
     steps:
       - uses: actions/checkout@v4
 
@@ -65,52 +135,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # build.sh copies the flavour's Containerfile in as Dockerfile, picks the
-      # flavour's own entrypoint.sh or the shared common/ one, stages any extra
-      # context files, and downloads the two binaries from their releases. The
-      # staging is reproduced here because a plain `docker build` has no such step.
-      - name: stage the build context
+      - name: stage the worker context
         env:
           WORKER_VERSION: ${{ steps.ver.outputs.worker }}
           EASYSTREAM_VERSION: ${{ steps.ver.outputs.easystream }}
         run: |
           set -euo pipefail
-          FLAVOUR="${{ matrix.flavour }}"
-          FDIR="$FLAVOUR"
           WORK="$(mktemp -d)"
           echo "WORK=$WORK" >> "$GITHUB_ENV"
-
-          cp "$FDIR/Containerfile" "$WORK/Dockerfile"
-
-          # A flavour may ship its own entrypoint (kiosk: cage+chromium+lockdown);
-          # otherwise the shared one, parameterised by DESKTOP_*.
-          if [ -f "$FDIR/entrypoint.sh" ]; then
-            ENTRY="$FDIR/entrypoint.sh"
-          else
-            ENTRY="common/entrypoint.sh"
-          fi
-          cp "$ENTRY" "$WORK/entrypoint.sh"
-          # The entrypoint is COPYed, so buildkit would reuse a stale layer; the
-          # Containerfile busts it with ARG ENTRY_HASH.
-          echo "ENTRY_HASH=$(sha256sum "$ENTRY" | cut -c1-16)" >> "$GITHUB_ENV"
-
-          # Extra context files a flavour ships (e.g. kiosk/chrome-policy.json).
-          for f in "$FDIR"/*; do
-            case "$(basename "$f")" in
-              Containerfile|entrypoint.sh) ;;
-              *) cp "$f" "$WORK/" 2>/dev/null || true ;;
-            esac
-          done
-
+          cp Containerfile.worker "$WORK/Dockerfile"
           GH=https://github.com
           curl -fsSL -o "$WORK/easyworker" \
             "$GH/$WORKER_REPO/releases/download/$WORKER_VERSION/easyworker-linux-amd64"
           curl -fsSL -o "$WORK/easystream" \
             "$GH/$EASYSTREAM_REPO/releases/download/$EASYSTREAM_VERSION/easystream-linux-amd64"
           chmod 755 "$WORK/easyworker" "$WORK/easystream"
-          # Bust the binary COPY layers on content: their only build arguments
-          # are the file names, so without this a new release was silently
-          # ignored and the image kept shipping the daemon from the first build.
+          # Bust the COPY layers on content: their only build arguments are the
+          # file names, so without this a new release was silently ignored and
+          # the image kept shipping the daemon from the first build.
           echo "BIN_HASH=$(cat "$WORK/easyworker" "$WORK/easystream" | sha256sum | cut -c1-16)" >> "$GITHUB_ENV"
           ls -l "$WORK"
 
@@ -123,17 +165,118 @@ jobs:
             ${{ env.REGISTRY }}/easydev-org/${{ matrix.image }}:${{ github.ref_name }}
             ${{ env.REGISTRY }}/easydev-org/${{ matrix.image }}:latest
           build-args: |
-            ENTRY_HASH=${{ env.ENTRY_HASH }}
+            BASE_IMAGE=${{ env.REGISTRY }}/easydev-org/sandbox-base-${{ matrix.base }}:${{ github.ref_name }}
             BIN_HASH=${{ env.BIN_HASH }}
 
-      # The image is only useful if the daemon is inside it and the entrypoint is
-      # the thing that runs. Both are cheap to check and expensive to discover in a
-      # cluster.
-      - name: verify the image
+  # The image is only useful if it starts, paints and answers. An image that
+  # builds but shows a black rectangle, or whose a11y API is dead, fails at the
+  # point of use - in a cluster, in front of a user.
+  smoke:
+    needs: [base, worker]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { flavour: openbox,  image: sandbox-x11 }
+          - { flavour: i3,       image: sandbox-i3 }
+          - { flavour: cinnamon, image: sandbox-cinnamon }
+          - { flavour: xfce4,    image: sandbox-xfce }
+          - { flavour: labwc,    image: sandbox-wayland }
+          - { flavour: sway,     image: sandbox-sway }
+          - { flavour: cage,     image: sandbox-cage }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: run the published image
         run: |
           set -euo pipefail
-          IMG="${{ env.REGISTRY }}/easydev-org/${{ matrix.image }}:latest"
-          docker run --rm --entrypoint sh "$IMG" -c \
-            'test -x /usr/local/bin/easyworker && test -x /usr/local/bin/easystream \
-             && echo "binaries present"'
-          docker inspect -f '{{.Config.Entrypoint}}' "$IMG"
+          IMG="${{ env.REGISTRY }}/easydev-org/${{ matrix.image }}:${{ github.ref_name }}"
+          docker run -d --name sb --shm-size=1g -p 48079:48079 "$IMG"
+          sleep 25
+          docker ps -a
+          docker logs sb 2>&1 | tail -40
+
+      - name: screenshot and inspect
+        run: |
+          set -euo pipefail
+          docker exec sb easystream screenshot --out /tmp/s.ppm \
+            || docker exec sb sh -c 'curl -fsS "http://127.0.0.1:48079/screenshot?out=/tmp/s.ppm"'
+          docker cp sb:/tmp/s.ppm /tmp/s.ppm
+          python3 - <<'PY'
+          import sys
+          data = open('/tmp/s.ppm','rb').read()
+          parts = data.split(b'\n', 3)
+          w, h = map(int, parts[1].split())
+          rgb = parts[3]
+          seen = {}
+          for i in range(0, len(rgb) - 2, 33):
+              seen[rgb[i:i+3]] = seen.get(rgb[i:i+3], 0) + 1
+          total = sum(seen.values())
+          distinct = len(seen)
+          dominant = max(seen.values()) * 100.0 / total
+          print(f"{w}x{h} distinct={distinct} dominant={dominant:.1f}%")
+          if distinct < 8:
+              sys.exit(f"BLANK: only {distinct} colours")
+          if dominant > 99.5:
+              sys.exit(f"BLANK: {dominant:.1f}% one colour")
+          print("PICTURE OK")
+          PY
+
+      - name: easystream API
+        run: |
+          set -euo pipefail
+          API="http://127.0.0.1:48079"
+          for endpoint in health apps windows tree; do
+            printf '%-10s ' "$endpoint"
+            code=$(curl -s -o /tmp/out -w '%{http_code}' --max-time 20 "$API/$endpoint" || echo 000)
+            echo "HTTP $code  bytes=$(wc -c < /tmp/out)"
+            [ "$code" = 200 ] || { echo "FAILED $endpoint"; exit 1; }
+          done
+          # /apps has to name something: an empty answer means the daemon is up
+          # but the accessibility bus is not, which is what a broken AT-SPI
+          # setup looks like from the outside.
+          curl -fsS --max-time 20 "$API/apps" | tee /tmp/apps
+          [ -s /tmp/apps ] || { echo "no apps: a11y bus not reachable"; exit 1; }
+
+      - name: easystream input and clipboard
+        run: |
+          set -euo pipefail
+          API="http://127.0.0.1:48079"
+          curl -fsS --max-time 20 -X POST "$API/click?x=100&y=100"
+          curl -fsS --max-time 20 -X POST --data 'echo smoke' "$API/type"
+          curl -fsS --max-time 20 -X POST "$API/key?name=Return"
+          curl -fsS --max-time 20 "$API/clipboard?set=smoke-roundtrip"
+          got=$(curl -fsS --max-time 20 "$API/clipboard?get")
+          echo "clipboard: $got"
+          echo "$got" | grep -q smoke-roundtrip || { echo "clipboard round-trip failed"; exit 1; }
+
+      - name: easyworker API
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /tmp/w -w '%{http_code}' --max-time 20 http://127.0.0.1:48080/ || echo 000)
+          echo "worker HTTP $code  bytes=$(wc -c < /tmp/w)"
+          [ "$code" != 000 ] || { echo "easyworker not listening on 48080"; exit 1; }
+
+      - name: artifacts and cleanup
+        if: always()
+        run: |
+          docker cp sb:/tmp/s.ppm screen.ppm 2>/dev/null || true
+          docker logs sb > containers.log 2>&1 || true
+          docker rm -f sb || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-smoke-${{ matrix.image }}
+          path: |
+            screen.ppm
+            containers.log
+          if-no-files-found: warn
+          retention-days: 14

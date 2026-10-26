@@ -37,19 +37,18 @@ RUN set -eux; \
     [ "$APT_OK" = 1 ] || { echo "APT INSTALL FAILED" >&2; exit 1; }; \
     rm -rf /var/lib/apt/lists/*
 
-# BIN_HASH busts the two COPY layers below on CONTENT, not on the file name.
+# The guest binaries live in stage 2, not here.
 #
-# BuildKit keys a COPY on its arguments, and those arguments are just the paths
-# ./easyworker and ./easystream. A new release downloads to the same paths, so
-# without this the layer is reused from the first build forever: the image is
-# rebuilt, its digest changes (the disk and entrypoint layers differ), and the
-# daemon inside is still the one from weeks ago. That is exactly what happened -
-# a rebuilt image still shipped an easyworker stamped Oct 21 while the release it
-# was supposed to contain was newer.
-ARG BIN_HASH=0
-RUN echo "binaries "
-COPY --chmod=755 ./easyworker /usr/local/bin/easyworker
-COPY --chmod=755 ./easystream   /usr/local/bin/easystream
+# This file builds the BASE image for the flavor: the desktop stack from apt,
+# plus the shared entrypoint. That is the expensive half - minutes of apt - and
+# it changes only when a desktop package or the entrypoint does.
+#
+# easyworker and easystream are installed by Containerfile.worker on top of this
+# image. They are separate GitHub releases on their own cadence, and neither is a
+# build-time dependency of the desktop: dropping them in is one COPY. Keeping
+# them out of here turns a new daemon release from a full apt rebuild into a cheap
+# layer, which is the whole point of splitting the build.
+
 ARG ENTRY_HASH=0
 # The shared entrypoint is copied in; ENTRY_HASH makes this layer
 # invalidate whenever common/entrypoint.sh changes (see build.sh).

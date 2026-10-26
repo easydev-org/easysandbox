@@ -1,0 +1,48 @@
+# easysandbox — stage 2: the guest binaries on top of a flavor's base image.
+#
+# One file for all seven flavors. The flavor is chosen by BASE_IMAGE, so there is
+# nothing per-desktop here: a desktop's identity lives entirely in its own
+# Containerfile, and this one only adds what runs inside it.
+#
+# Why two stages:
+#
+#   stage 1 (openbox/Containerfile, i3/Containerfile, ...)  debian + apt desktop
+#   stage 2 (this file)                                     easyworker + easystream
+#
+# The halves move at different speeds. A desktop only changes when its packages
+# or the entrypoint do; the two binaries come from their own GitHub releases and
+# can be rebuilt many times a day. With them in stage 1 every daemon bump paid for
+# a full apt run; here it is one COPY, and a manager asking for "the latest
+# easyworker on top of the image we already trust" is `--build-arg`.
+#
+# Build (build.sh does this, including fetching the binaries):
+#   buildctl build --opt build-arg:BASE_IMAGE=<base image> ...
+
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=localhost,127.0.0.1,.svc.cluster.local,.svc,.nip.io,10.199.64.20
+
+# Content hash of both binaries. BuildKit keys a COPY on its arguments, and those
+# are only the paths ./easyworker and ./easystream - so a new release downloads to
+# the same paths and the layer would be served from cache forever. The image
+# digest would change (other layers differ) while the daemon inside stayed the one
+# from the first build. This line makes the COPY below invalidate on content.
+#
+# Observed for real: a rebuilt image shipped an easyworker stamped Oct 21 while
+# the release it was built from was newer.
+ARG BIN_HASH=0
+RUN echo "guest binaries ${BIN_HASH}"
+
+COPY --chmod=755 ./easyworker /usr/local/bin/easyworker
+COPY --chmod=755 ./easystream /usr/local/bin/easystream
+
+# The entrypoint from stage 1 is `exec easyworker`, so both have to be executable
+# and on PATH. Check it here, where the failure message names this file.
+RUN test -x /usr/local/bin/easyworker \
+ && test -x /usr/local/bin/easystream \
+ && /usr/local/bin/easystream --version 2>/dev/null || true
