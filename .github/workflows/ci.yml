@@ -210,27 +210,79 @@ jobs:
       - name: screenshot and inspect
         run: |
           set -euo pipefail
-          docker exec sb easystream screenshot --out /tmp/s.ppm 2>/dev/null \
-            || docker exec sb sh -c 'curl -fsS "http://127.0.0.1:48079/screenshot?out=/tmp/s.ppm"'
-          docker cp sb:/tmp/s.ppm /tmp/s.ppm
+          # /a11y/screenshot, from the HOST against the mapped port.
+          #
+          # The endpoint answers PNG bytes - there is no ?out=, and no one-shot
+          # CLI either: main() replies 'usage: easystream [serve]' to anything
+          # that is not serve. Not docker exec either, because the image has no
+          # curl inside and a file written in the container is not a file here.
+          curl -fsS --max-time 30 "http://127.0.0.1:48079/a11y/screenshot" -o screen.png
+          ls -l screen.png
           python3 - <<'PY'
-          import sys
-          data = open('/tmp/s.ppm','rb').read()
-          # P6 header: magic, width height, maxval
-          parts = data.split(b'\n', 3)
-          w, h = map(int, parts[1].split())
-          rgb = parts[3]
+          import sys, zlib, struct
+
+          raw = open('screen.png','rb').read()
+          if not raw.startswith(b'\x89PNG'):
+              sys.exit("not a PNG: the daemon answered something else")
+
+          # Minimal PNG decode: walk the chunks, undo the scanline filters, count
+          # distinct RGB values. Enough to tell a desktop from a blank screen, and
+          # it needs no pillow on the runner.
+          pos, w, h, depth, ctype, idat = 8, 0, 0, 0, 0, b''
+          while pos < len(raw):
+              ln = struct.unpack('>I', raw[pos:pos+4])[0]
+              typ = raw[pos+4:pos+8]
+              body = raw[pos+8:pos+8+ln]
+              if typ == b'IHDR':
+                  w, h, depth, ctype = struct.unpack('>IIBB', body[:10])
+              elif typ == b'IDAT':
+                  idat += body
+              elif typ == b'IEND':
+                  break
+              pos += 12 + ln
+
+          if depth != 8 or ctype not in (2, 6):
+              sys.exit(f"unsupported PNG: depth={depth} colour type={ctype}")
+          chan = 3 if ctype == 2 else 4
+          data = zlib.decompress(idat)
+          stride = w * chan
+          prev = bytearray(stride)
           seen = {}
-          for i in range(0, len(rgb) - 2, 33):
-              c = rgb[i:i+3]
-              seen[c] = seen.get(c, 0) + 1
+          off = 0
+          for _ in range(h):
+              ft = data[off]; off += 1
+              line = bytearray(data[off:off+stride]); off += stride
+              if ft == 1:
+                  for i in range(chan, stride):
+                      line[i] = (line[i] + line[i-chan]) & 0xFF
+              elif ft == 2:
+                  for i in range(stride):
+                      line[i] = (line[i] + prev[i]) & 0xFF
+              elif ft == 3:
+                  for i in range(stride):
+                      a = line[i-chan] if i >= chan else 0
+                      line[i] = (line[i] + ((a + prev[i]) >> 1)) & 0xFF
+              elif ft == 4:
+                  for i in range(stride):
+                      a = line[i-chan] if i >= chan else 0
+                      b = prev[i]
+                      c = prev[i-chan] if i >= chan else 0
+                      p = a + b - c
+                      pa, pb, pc = abs(p-a), abs(p-b), abs(p-c)
+                      pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                      line[i] = (line[i] + pr) & 0xFF
+              for x in range(0, stride, chan * 17):
+                  c = bytes(line[x:x+3])
+                  seen[c] = seen.get(c, 0) + 1
+              prev = line
+
           total = sum(seen.values())
           distinct = len(seen)
           dominant = max(seen.values()) * 100.0 / total
           print(f"{w}x{h} distinct={distinct} dominant={dominant:.1f}%")
-          # A desktop that drew nothing is one colour at ~100%. A real one is
-          # many colours; a compositor with no wallpaper is a low count but still
-          # far above one. Same bounds the NixOS harness settled on.
+          # A screen that drew nothing is one colour at 100%. A compositor with
+          # no wallpaper is nearly uniform but still has many colours - the count
+          # is the signal, not the share.
           if distinct < 8:
               sys.exit(f"BLANK: only {distinct} colours")
           if dominant > 99.5:
@@ -241,33 +293,32 @@ jobs:
       - name: easystream API
         run: |
           set -euo pipefail
-          # Every endpoint is on the daemon the image ships. A passing /health
-          # with a failing /apps means the daemon is up but cannot see the
-          # desktop, which is the failure this test exists to catch.
+          # The daemon's real surface, read off src/http.rs: /health and
+          # /capabilities at the top, everything else under /a11y/.
           API="http://127.0.0.1:48079"
-          for endpoint in health apps windows tree; do
-            printf '%-10s ' "$endpoint"
+          for endpoint in health capabilities a11y/apps a11y/tree; do
+            printf '%-14s ' "$endpoint"
             code=$(curl -s -o /tmp/out -w '%{http_code}' --max-time 20 "$API/$endpoint" || echo 000)
             echo "HTTP $code  bytes=$(wc -c < /tmp/out)"
             [ "$code" = 200 ] || { echo "FAILED $endpoint"; exit 1; }
           done
-          # /apps has to NAME something: an empty list means the daemon is up
-          # but the accessibility bus is not, which is exactly what a broken
-          # AT-SPI setup looks like.
-          curl -fsS --max-time 20 "$API/apps" | tee /tmp/apps
-          [ -s /tmp/apps ] || { echo "no apps: the a11y bus is not reachable"; exit 1; }
+          # /a11y/apps has to name something: an empty answer means the daemon is
+          # up but the accessibility bus is not, which is what a broken AT-SPI
+          # setup looks like from the outside.
+          curl -fsS --max-time 20 "$API/a11y/apps" | tee /tmp/apps
+          [ -s /tmp/apps ] || { echo "no apps: a11y bus not reachable"; exit 1; }
 
       - name: easystream input and clipboard
         run: |
           set -euo pipefail
           API="http://127.0.0.1:48079"
-          curl -fsS --max-time 20 -X POST "$API/click?x=100&y=100"
-          curl -fsS --max-time 20 -X POST --data 'echo smoke' "$API/type"
-          curl -fsS --max-time 20 -X POST "$API/key?name=Return"
+          curl -fsS --max-time 20 -X POST "$API/a11y/click?x=100&y=100"
+          curl -fsS --max-time 20 -X POST --data 'echo smoke' "$API/a11y/type"
+          curl -fsS --max-time 20 -X POST "$API/a11y/key?name=Return"
           # Clipboard has to round-trip: set then get. Reading back what was
           # written is the only way to know both directions work.
-          curl -fsS --max-time 20 "$API/clipboard?set=smoke-roundtrip"
-          got=$(curl -fsS --max-time 20 "$API/clipboard?get")
+          curl -fsS --max-time 20 "$API/a11y/clipboard?set=smoke-roundtrip"
+          got=$(curl -fsS --max-time 20 "$API/a11y/clipboard?get")
           echo "clipboard: $got"
           echo "$got" | grep -q smoke-roundtrip || { echo "clipboard round-trip failed"; exit 1; }
 
@@ -282,7 +333,6 @@ jobs:
       - name: screenshot artifact and cleanup
         if: always()
         run: |
-          docker cp sb:/tmp/s.ppm screen.ppm 2>/dev/null || true
           docker logs sb > containers.log 2>&1 || true
           docker rm -f sb || true
 
@@ -291,7 +341,7 @@ jobs:
         with:
           name: smoke-${{ matrix.image }}
           path: |
-            screen.ppm
+            screen.png
             containers.log
           if-no-files-found: warn
           retention-days: 14
