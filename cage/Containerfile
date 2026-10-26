@@ -54,6 +54,9 @@ RUN mkdir -p /root/workspace
 
 # cage takes the kiosk app as its argument; foot is the "one app" (a terminal is
 # the most useful single app to drive).
+# cage runs exactly ONE client and refuses a second, so the window it draws is
+# DESKTOP_CMD (a GTK client, so it publishes an AT-SPI tree); DESKTOP_TERM stays
+# empty because there is nothing extra to start.
 ENV WORKER_PORT=48080 \
     WORKER_DB=/data/jobs.db \
     SCREEN_GEOMETRY_WL=1024x768 \
@@ -66,9 +69,7 @@ ENV WORKER_PORT=48080 \
     DESKTOP_KIND=wayland \
     DESKTOP_ENV="WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1" \
     DESKTOP_CMD="cage -- zenity --progress --text=easyworker --pulsate --no-cancel --width=420" \
-    # cage runs ONE client and refuses a second, so the window it
-    # draws is DESKTOP_CMD above; there is nothing extra to start.
-    DESKTOP_TERM="" \
+    DESKTOP_TERM=""
 
 EXPOSE 48080
 ENTRYPOINT ["/usr/bin/tini", "-s", "/usr/local/bin/entrypoint.sh"]
