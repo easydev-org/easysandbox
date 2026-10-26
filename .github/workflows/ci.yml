@@ -240,6 +240,20 @@ jobs:
           docker exec sb sh -c 'cat /tmp/term.log 2>&1 || echo "no /tmp/term.log"' 2>&1 || true
           echo "=== is anything on the X display ==="
           docker exec sb sh -c 'DISPLAY=:99 xdotool search --name . 2>&1 | head; DISPLAY=:99 xwininfo -root -children 2>&1 | head -20' 2>&1 || true
+          # easystream reaches AT-SPI by asking org.a11y.Bus on the SESSION bus
+          # for the accessibility bus address, then connecting to that. So the
+          # question is not 'did the entrypoint print a line' but 'is org.a11y.Bus
+          # on the session bus, and does GetAddress answer'.
+          echo "=== org.a11y.Bus on the session bus ==="
+          docker exec sb sh -c '
+            export DBUS_SESSION_BUS_ADDRESS=$(cat /tmp/agent-dbus-addr 2>/dev/null || echo unix:path=/tmp/agent-dbus)
+            echo "bus=$DBUS_SESSION_BUS_ADDRESS"
+            command -v dbus-send >/dev/null && dbus-send --session --dest=org.freedesktop.DBus --type=method_call --print-reply /org/freedesktop/DBus org.freedesktop.DBus.ListNames 2>&1 | grep -iE "a11y|atspi" || echo "dbus-send missing or no a11y names"
+            ls -la /run/user/*/at-spi* /tmp/at-spi* 2>/dev/null || true
+            ps -eo comm= | grep -iE "at-spi|atspi" || echo "no at-spi process"
+          ' 2>&1 || true
+          echo "=== raw easystream a11y error ==="
+          docker exec sb sh -c 'curl -sS "http://127.0.0.1:48079/a11y/apps" 2>&1 | head -5 || true' 2>&1 || true
           echo "=== full container log ==="
           docker logs sb 2>&1 | tail -60
           exit 1
