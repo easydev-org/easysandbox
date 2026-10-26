@@ -198,7 +198,7 @@ jobs:
         run: |
           set -euo pipefail
           IMG="${{ env.REGISTRY }}/easydev-org/${{ matrix.image }}:${{ github.ref_name }}"
-          docker run -d --name sb --shm-size=1g -p 48079:48079 -p 48080:48080 "$IMG"
+          docker run -d --name sb --shm-size=1g -p 48078:48078 -p 48080:48080 "$IMG"
           # No fixed settle; the next step polls /health until the daemon answers.
           sleep 1
           docker ps -a
@@ -210,7 +210,7 @@ jobs:
           # /health and /capabilities never touch the a11y backend: one is a
           # constant, the other is a value probe.rs decided once at startup. They
           # must answer even when the desktop is the problem, so they run first.
-          API="http://127.0.0.1:48079"
+          API="http://127.0.0.1:48078"
 
           # Poll for the listener rather than sleeping a fixed time. The
           # entrypoint starts Xvfb, the session bus, the system bus step, at-spi2,
@@ -228,7 +228,7 @@ jobs:
             sleep 1
           done
           [ "$up" = 1 ] || {
-            echo "daemon never listened on 48079" >&2
+            echo "daemon never listened on 48078" >&2
             docker logs sb 2>&1 | tail -40
             exit 1
           }
@@ -256,7 +256,7 @@ jobs:
           # and the connection is closed with NO http response at all - curl exits
           # 56 ('failure receiving data'). An unreachable a11y bus therefore looks
           # like a broken network call rather than a desktop still starting.
-          API="http://127.0.0.1:48079"
+          API="http://127.0.0.1:48078"
           for i in $(seq 1 60); do
             if curl -fsS --max-time 5 "$API/a11y/apps" -o /tmp/apps 2>/dev/null && [ -s /tmp/apps ]; then
               echo "a11y bus ready after ${i}0% of the budget"
@@ -278,7 +278,7 @@ jobs:
           # CLI either: main() replies 'usage: easystream [serve]' to anything
           # that is not serve. Not docker exec either, because the image has no
           # curl inside and a file written in the container is not a file here.
-          curl -fsS --max-time 30 "http://127.0.0.1:48079/a11y/screenshot" -o screen.png
+          curl -fsS --max-time 30 "http://127.0.0.1:48078/a11y/screenshot" -o screen.png
           ls -l screen.png
           python3 - <<'PY'
           import sys, zlib, struct
@@ -357,7 +357,7 @@ jobs:
           set -euo pipefail
           # The daemon's real surface, read off src/http.rs: /health and
           # /capabilities at the top, everything else under /a11y/.
-          API="http://127.0.0.1:48079"
+          API="http://127.0.0.1:48078"
           for endpoint in health capabilities a11y/apps a11y/tree; do
             printf '%-14s ' "$endpoint"
             code=$(curl -s -o /tmp/out -w '%{http_code}' --max-time 20 "$API/$endpoint" || echo 000)
@@ -373,7 +373,7 @@ jobs:
       - name: easystream input and clipboard
         run: |
           set -euo pipefail
-          API="http://127.0.0.1:48079"
+          API="http://127.0.0.1:48078"
           curl -fsS --max-time 20 -X POST "$API/a11y/click?x=100&y=100"
           curl -fsS --max-time 20 -X POST --data 'echo smoke' "$API/a11y/type"
           curl -fsS --max-time 20 -X POST "$API/a11y/key?name=Return"

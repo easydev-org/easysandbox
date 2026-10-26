@@ -73,5 +73,5 @@ ENV WORKER_PORT=48080 \
     DESKTOP_CMD="xfce4-session" \
     DESKTOP_TERM="zenity --progress --text=easyworker --pulsate --no-cancel --width=420"
 
-EXPOSE 48080
+EXPOSE 48078 48080
 ENTRYPOINT ["/usr/bin/tini", "-s", "/usr/local/bin/entrypoint.sh"]
