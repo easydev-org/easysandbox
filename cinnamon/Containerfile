@@ -71,7 +71,7 @@ ENV WORKER_PORT=48080 \
     DESKTOP_KIND=x11 \
     DESKTOP_ENV="XDG_CURRENT_DESKTOP=X-Cinnamon XDG_SESSION_DESKTOP=cinnamon" \
     DESKTOP_CMD="cinnamon-session --session cinnamon" \
-    DESKTOP_TERM="gnome-terminal --title easyworker"
+    DESKTOP_TERM="zenity --progress --text=easyworker --pulsate --no-cancel --width=420" \
 
 EXPOSE 48080
 ENTRYPOINT ["/usr/bin/tini", "-s", "/usr/local/bin/entrypoint.sh"]

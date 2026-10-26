@@ -208,6 +208,24 @@ jobs:
           docker ps -a
           docker logs sb 2>&1 | tail -40
 
+      - name: daemon is up
+        run: |
+          set -euo pipefail
+          # These two do not touch the a11y backend, so they answer even when the
+          # accessibility bus is unreachable - a constant and a value that
+          # probe.rs decided once at startup. Run them FIRST: if the desktop is
+          # the problem, the failure should be in the desktop step with the
+          # daemon's own view of the session printed above it.
+          API="http://127.0.0.1:48079"
+          echo "--- /health ---"
+          curl -fsS --max-time 10 "$API/health"; echo
+          echo "--- /capabilities ---"
+          curl -fsS --max-time 10 "$API/capabilities" | tee /tmp/caps
+          echo
+          # capabilities must at least name a session; without that the daemon has
+          # no display and nothing else can work.
+          grep -qiE '"(Session|session)"' /tmp/caps             || { echo "capabilities names no session: $cat /tmp/caps" >&2; exit 1; }
+
       - name: wait for the session
         run: |
           set -euo pipefail
@@ -254,6 +272,40 @@ jobs:
           ' 2>&1 || true
           echo "=== raw easystream a11y error ==="
           docker exec sb sh -c 'curl -sS "http://127.0.0.1:48079/a11y/apps" 2>&1 | head -5 || true' 2>&1 || true
+          # zenity in Debian trixie is GTK4 (4.1.90), and the model on disk is
+          # that GTK4 publishes to AT-SPI by itself. If it does not register,
+          # either the GTK version is the problem or the a11y stack is. Install a
+          # GTK3 app at test time and start it alongside: if the GTK3 one appears
+          # in /a11y/apps and the GTK4 one does not, the version is the answer.
+          echo "=== is the client even installed, and which GTK ==="
+          docker exec sb sh -c '
+            command -v zenity && zenity --version 2>&1 | head -2
+            ls -l /usr/lib/x86_64-linux-gnu/libgtk-4* /usr/lib/x86_64-linux-gnu/libgtk-3* 2>/dev/null | head
+            echo "--- at-spi2-core version ---"
+            dpkg -l at-spi2-core 2>/dev/null | tail -1
+          ' 2>&1 || true
+          echo "=== try a GTK3 client alongside ==="
+          docker exec sb sh -c '
+            apt-get -qq update >/dev/null 2>&1 || true
+            apt-get -qq install -y --no-install-recommends galculator >/dev/null 2>&1 \
+              && echo "galculator installed" || echo "galculator install failed (offline?)"
+          ' 2>&1 || true
+          docker exec sb sh -c '
+            export DISPLAY=:99 XDG_RUNTIME_DIR=/tmp/xdg
+            galculator >/tmp/gcal.log 2>&1 &
+            sleep 5
+            echo "galculator running: $(pgrep -c galculator || echo 0)"
+            echo "--- /a11y/apps after GTK3 client ---"
+            curl -sS "http://127.0.0.1:48079/a11y/apps" 2>&1 | head -10
+            echo "--- gcal.log ---"
+            cat /tmp/gcal.log 2>&1 | head -10
+          ' 2>&1 || true
+          echo "=== what AT-SPI sees on its own bus ==="
+          docker exec sb sh -c '
+            ls -l /tmp/at-spi-registry.log 2>/dev/null && cat /tmp/at-spi-registry.log 2>&1 | head -20
+            echo "--- bus pid alive? ---"
+            cat /tmp/at-spi-bus.pid 2>/dev/null | xargs -r ps -p 2>&1 | tail -2
+          ' 2>&1 || true
           echo "=== full container log ==="
           docker logs sb 2>&1 | tail -60
           exit 1

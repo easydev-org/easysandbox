@@ -74,7 +74,7 @@ ENV WORKER_PORT=48080 \
     ACCESSIBILITY_ENABLED=1 \
     DESKTOP_KIND=x11 \
     DESKTOP_CMD="openbox" \
-    DESKTOP_TERM="xterm -geometry 100x28+20+20 -title easyworker"
+    DESKTOP_TERM="zenity --progress --text=easyworker --pulsate --no-cancel --width=420" \
 
 EXPOSE 48080
 ENTRYPOINT ["/usr/bin/tini", "-s", "/usr/local/bin/entrypoint.sh"]

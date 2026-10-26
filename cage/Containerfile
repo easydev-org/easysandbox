@@ -65,8 +65,10 @@ ENV WORKER_PORT=48080 \
     ACCESSIBILITY_ENABLED=1 \
     DESKTOP_KIND=wayland \
     DESKTOP_ENV="WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1" \
-    DESKTOP_CMD="cage -- foot" \
-    DESKTOP_TERM=""
+    DESKTOP_CMD="cage -- zenity --progress --text=easyworker --pulsate --no-cancel --width=420" \
+    # cage runs ONE client and refuses a second, so the window it
+    # draws is DESKTOP_CMD above; there is nothing extra to start.
+    DESKTOP_TERM="" \
 
 EXPOSE 48080
 ENTRYPOINT ["/usr/bin/tini", "-s", "/usr/local/bin/entrypoint.sh"]

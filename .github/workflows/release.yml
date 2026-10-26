@@ -204,6 +204,24 @@ jobs:
           docker ps -a
           docker logs sb 2>&1 | tail -40
 
+      - name: daemon is up
+        run: |
+          set -euo pipefail
+          # These two do not touch the a11y backend, so they answer even when the
+          # accessibility bus is unreachable - a constant and a value that
+          # probe.rs decided once at startup. Run them FIRST: if the desktop is
+          # the problem, the failure should be in the desktop step with the
+          # daemon's own view of the session printed above it.
+          API="http://127.0.0.1:48079"
+          echo "--- /health ---"
+          curl -fsS --max-time 10 "$API/health"; echo
+          echo "--- /capabilities ---"
+          curl -fsS --max-time 10 "$API/capabilities" | tee /tmp/caps
+          echo
+          # capabilities must at least name a session; without that the daemon has
+          # no display and nothing else can work.
+          grep -qiE '"(Session|session)"' /tmp/caps             || { echo "capabilities names no session: $cat /tmp/caps" >&2; exit 1; }
+
       - name: wait for the session
         run: |
           set -euo pipefail
