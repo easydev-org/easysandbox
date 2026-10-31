@@ -80,7 +80,7 @@ export NO_PROXY no_proxy
 # AN IMAGE BUILT FROM AN OLDER TAG WOULD STILL START and still answer Info — which is exactly why the
 # version is pinned here rather than floating: the mismatch shows up as every command being refused for
 # a missing language, on a sandbox whose worker reported itself healthy.
-WORKER_VERSION="${WORKER_VERSION:-v0.4.0}"
+WORKER_VERSION="${WORKER_VERSION:-v0.4.1}"
 EASYSTREAM_VERSION="${EASYSTREAM_VERSION:-v0.5.3}"
 RELEASE_PROXY="${RELEASE_PROXY:-${PROXY:-http://mihomo.develop.svc.cluster.local:7890}}"
 GH="https://github.com/easydev-org"
