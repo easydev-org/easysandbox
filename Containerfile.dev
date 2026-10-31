@@ -1,0 +1,79 @@
+# easysandbox — a DEVELOPMENT layer: the same desktop, with a toolchain in it.
+#
+# FROM THE FLESHED-OUT IMAGE, not from the base. A dev sandbox is "the sandbox we ship, plus the things
+# you need to build something inside it" — starting from the desktop-only stage would mean building the
+# desktop twice, and would let the two drift.
+#
+# WHAT IS ADDED, AND WHAT IS DELIBERATELY NOT:
+#
+#   build-essential  a compiler, because half the things worth trying are `pip install <something with a
+#                    C extension>` and the failure without it is a wall of gcc errors
+#   python3 + pip    the language this layer exists for; `python3-venv` is separate on Debian and its
+#                    absence turns every virtualenv into a confusing error
+#   nodejs + npm     the other one; from Debian rather than nodesource, because a dev sandbox wants
+#                    "a node" and not "the newest node", and a third-party repo is another thing to
+#                    trust and to keep working
+#   golang           build-essential and git are already here, and Go needs nothing else
+#   curl/git/jq/...  the small tools whose absence produces "command not found" in the middle of a
+#                    script somebody else wrote
+#
+# THE VERSION IS THE DISTRO'S, ON PURPOSE. A dev sandbox is for trying things out, not for pinning a
+# compiler; anyone who needs a specific toolchain installs it inside, which is what the toolchain in
+# this image is FOR.
+#
+# NOT ADDED: databases, browsers, language servers, anything that would make the image large enough to
+# change how it starts. Those belong inside a running sandbox, not baked into every one of them.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=localhost,127.0.0.1,.svc.cluster.local,.svc,.nip.io,10.199.64.20 \
+    DEBIAN_FRONTEND=noninteractive
+
+USER root
+
+# The apt retry loop is the same shape as the desktop stages use: the mirrors this builds against are
+# reached through a proxy that occasionally drops a connection mid-download, and a two-minute apt run
+# that fails at 90% should not fail the build.
+RUN set -eux; \
+    echo "apt via ${HTTP_PROXY:-direct}"; \
+    apt-get -o Acquire::Retries=10 update; \
+    APT_OK=0; \
+    for i in 1 2 3 4 5 6; do \
+      apt-get -o Acquire::Retries=10 install -y --no-install-recommends \
+        build-essential pkg-config \
+        python3 python3-pip python3-venv python3-dev \
+        nodejs npm \
+        golang-go \
+        curl wget ca-certificates git jq \
+        vim less procps unzip zip tar xz-utils \
+      && { APT_OK=1; break; } || { echo "apt retry $i"; sleep 3; }; \
+    done; \
+    [ "$APT_OK" = 1 ] || { echo "APT INSTALL FAILED" >&2; exit 1; }; \
+    rm -rf /var/lib/apt/lists/*
+
+# pip refuses to install outside a virtualenv on Debian ("externally-managed-environment"), and in a
+# THROWAWAY sandbox the venv is a step nobody wants. This flag is the documented way to say "I know, it
+# is a container", and a dev image is exactly the case it was written for.
+#
+# THE FILE IS REMOVED RATHER THAN THE FLAG PASSED EVERY TIME, so `pip install x` works in a script
+# without every author remembering a flag.
+RUN rm -f /usr/lib/python3*/EXTERNALLY-MANAGED
+
+# A first-run probe, in the image, so a broken layer is caught here rather than by whoever opens the
+# sandbox next. `node --version` and not just `command -v node`: a package that installs a stub is the
+# failure this check exists to catch, and it is the one that survives a LookPath-only test.
+RUN python3 --version \
+ && python3 -c "import venv, ssl, sqlite3; print('python stdlib ok')" \
+ && node --version \
+ && npm --version \
+ && go version \
+ && gcc --version | head -1 \
+ && git --version \
+ && curl --version | head -1
+
+ARG TOOLCHAIN_HASH=0
+RUN echo "dev toolchain ${TOOLCHAIN_HASH}"

@@ -39,7 +39,7 @@ ROOT="$(cd "${DIR}/../.." && pwd)"
 # dependency of the desktop, so that is a layer, not a rebuild.
 STAGE="${STAGE:-all}"
 if [ "${1:-}" = "--stage" ]; then STAGE="${2:?--stage needs base|worker|all}"; shift 2; fi
-case "${STAGE}" in base|worker|all) ;; *) echo "STAGE must be base, worker or all (got '${STAGE}')" >&2; exit 2 ;; esac
+case "${STAGE}" in base|worker|dev|all) ;; *) echo "STAGE must be base, worker, dev or all (got '${STAGE}')" >&2; exit 2 ;; esac
 
 FLAVOR="${1:-${FLAVOR:-openbox}}"
 # Seven flavors: four X11, three Wayland. X11 keeps the desktops that have no
@@ -63,6 +63,10 @@ NAMESPACE="${NAMESPACE:-sandbox}"
 NAME="${NAME:-$DEFAULT_NAME}"
 TAG="${TAG:-debian-trixie}"
 DEST="${REGISTRY}/${NAMESPACE}/${NAME}:${TAG}"
+# The dev tag is a SEPARATE NAME, not a second tag on the shipped image: `:dev` says "the same sandbox
+# with a toolchain", and putting that on the image a deployment pulls would make the tag lie about what
+# it contains.
+DEST_DEV="${DEST_DEV:-${REGISTRY}/${NAMESPACE}/${NAME}:dev}"
 BUILDKIT="${BUILDKIT_ADDR:-tcp://buildkitd.agent.svc.cluster.local:1234}"
 PROXY="${PROXY:-http://mihomo.develop.svc.cluster.local:7890}"
 # Keep in-cluster traffic OFF the proxy (buildctl gRPC to buildkitd, the
@@ -191,8 +195,46 @@ build_worker() {
   echo "pushed: ${DEST}"
 }
 
+# ---------------------------------------------------------------------------
+# stage: dev
+# ---------------------------------------------------------------------------
+# The shipped image plus a build toolchain, tagged <name>:dev.
+#
+# FROM THE WORKER IMAGE, so "dev" is exactly "the sandbox we run, and a compiler in it". Building the
+# desktop again here would let the two drift, and would double the apt time for the same packages.
+#
+# NOT A FLAVOR: it takes whatever ${DEST} names, so `TOOLCHAIN=1 TAG=dev ./build.sh labwc` is the dev
+# variant of labwc and nothing else. The seven flavors keep their own names.
+build_dev() {
+  local work
+  work="$(mktemp -d)"
+  cp "${DIR}/Containerfile.dev" "${work}/Dockerfile"
+
+  # The toolchain packages change rarely; the layer is invalidated by an explicit hash so a rebuild
+  # after editing Containerfile.dev does not serve a cached layer from before the edit.
+  local tc_hash
+  tc_hash="$(sha256sum "${DIR}/Containerfile.dev" | cut -c1-16)"
+
+  echo "Building ${NAME}:${TAG} from ${DEST} (toolchain layer, ${tc_hash})"
+  "${BUILDCTL}" --addr "${BUILDKIT}" build \
+    --frontend dockerfile.v0 \
+    --local "context=${work}" \
+    --local "dockerfile=${work}" \
+    --opt "filename=Dockerfile" \
+    --opt "build-arg:BASE_IMAGE=${DEST}" \
+    --opt "build-arg:TOOLCHAIN_HASH=${tc_hash}" \
+    --opt "build-arg:HTTP_PROXY=${PROXY}" \
+    --opt "build-arg:HTTPS_PROXY=${PROXY}" \
+    --opt "build-arg:NO_PROXY=${NO_PROXY_OPT}" \
+    --output "type=image,name=${DEST_DEV},push=true,registry.insecure=true,compression=zstd" \
+    --progress plain
+  rm -rf "${work}"
+  echo "pushed: ${DEST_DEV}"
+}
+
 case "${STAGE}" in
   base)   build_base ;;
   worker) build_worker ;;
+  dev)    build_dev ;;
   all)    build_base; build_worker ;;
 esac

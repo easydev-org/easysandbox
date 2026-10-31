@@ -164,6 +164,68 @@ jobs:
             BASE_IMAGE=${{ env.REGISTRY }}/easydev-org/sandbox-base-${{ matrix.base }}:${{ needs.base.outputs.tag }}
             BIN_HASH=${{ env.BIN_HASH }}
 
+
+  # ---------------------------------------------------------------------------
+  # dev: the shipped sandbox PLUS a build toolchain, tagged :dev.
+  #
+  # A SEPARATE JOB, AND ONLY FOR labwc, because it answers a different question. `worker` asks "does the
+  # image we ship start"; this asks "is there an image I can build things inside". Baking the toolchain
+  # into every flavour would double the size of six images nobody asked to develop in.
+  #
+  # IT RUNS AFTER `worker` so it layers on the image that job just pushed — the same bytes a deployment
+  # would get, plus gcc.
+  dev:
+    needs: [base, worker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # FROM THE PUBLISHED worker image, by the tag this run just produced. Not a rebuild: the desktop
+      # and the two binaries are already in it, and rebuilding them would be two chances to differ.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Containerfile.dev
+          push: true
+          tags: ${{ env.REGISTRY }}/easydev-org/sandbox-wayland:dev
+          build-args: |
+            BASE_IMAGE=${{ env.REGISTRY }}/easydev-org/sandbox-wayland:${{ needs.base.outputs.tag }}
+            TOOLCHAIN_HASH=${{ github.sha }}
+
+      # THE TOOLCHAIN IS THE POINT, so it is proven to work rather than assumed. A dev image whose
+      # python cannot import venv, or whose node is a stub, is worse than none: it fails inside the
+      # sandbox, on whoever opens it, at the moment they try to use it.
+      - name: the toolchain actually runs
+        run: |
+          set -euo pipefail
+          IMG="${{ env.REGISTRY }}/easydev-org/sandbox-wayland:dev"
+          docker run --rm --entrypoint sh "$IMG" -c '
+            set -e
+            python3 --version
+            python3 -c "import venv, ssl, sqlite3, json, urllib.request"
+            node --version
+            npm --version
+            go version
+            gcc --version | head -1
+            git --version
+            curl --version | head -1
+            make --version | head -1
+            echo "--- a real program, compiled and run ---"
+            printf "#include <stdio.h>\nint main(void){printf(\"c-ok\\n\");return 0;}\n" > /tmp/t.c
+            gcc -o /tmp/t /tmp/t.c && /tmp/t
+            echo "--- python round trip ---"
+            python3 -c "import json,sys; sys.stdout.write(json.dumps({\"ok\": True}) + chr(10))"
+          '
+
   # ---------------------------------------------------------------------------
   # smoke: start the image, prove the desktop paints, and prove the daemon
   # answers. An image that builds and pushes but shows a black rectangle, or
