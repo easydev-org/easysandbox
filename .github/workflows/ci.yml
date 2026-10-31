@@ -208,23 +208,19 @@ jobs:
         run: |
           set -euo pipefail
           IMG="${{ env.REGISTRY }}/easydev-org/sandbox-wayland:dev"
-          docker run --rm --entrypoint sh "$IMG" -c '
-            set -e
-            python3 --version
-            python3 -c "import venv, ssl, sqlite3, json, urllib.request"
-            node --version
-            npm --version
-            go version
-            gcc --version | head -1
-            git --version
-            curl --version | head -1
-            make --version | head -1
-            echo "--- a real program, compiled and run ---"
-            printf "#include <stdio.h>\nint main(void){printf(\"c-ok\\n\");return 0;}\n" > /tmp/t.c
-            gcc -o /tmp/t /tmp/t.c && /tmp/t
-            echo "--- python round trip ---"
-            python3 -c "import json,sys; sys.stdout.write(json.dumps({\"ok\": True}) + chr(10))"
-          '
+          # THE PROBE IS A FILE IN THE REPOSITORY, not a heredoc in this YAML.
+          #
+          # The first version embedded it here and was wrong twice for the same reason: YAML, shell and
+          # the C compiler each have their own idea of what a backslash means, so the `\n` that reached
+          # gcc was a real newline and the program did not compile — and the step still passed, because
+          # `set -e` inside `sh -c` does not fail the outer step when the last command succeeds.
+          #
+          # A file removes every layer of quoting, can be run by hand against a local image, and its
+          # `set -eu` propagates: docker run exits non-zero, so this step fails.
+          docker run --rm \
+            --entrypoint sh \
+            -v "$PWD/probe-toolchain.sh:/probe-toolchain.sh:ro" \
+            "$IMG" /probe-toolchain.sh
 
   # ---------------------------------------------------------------------------
   # smoke: start the image, prove the desktop paints, and prove the daemon
