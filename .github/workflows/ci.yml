@@ -451,6 +451,78 @@ jobs:
           echo "worker HTTP $code  bytes=$(wc -c < /tmp/w)"
           [ "$code" != 000 ] || { echo "easyworker is not listening on 48080"; exit 1; }
 
+      # THE IMAGE BAKES A WORKER BINARY, AND "THE PORT IS OPEN" DOES NOT SAY THAT BINARY WORKS.
+      #
+      # The check above accepts ANY status code, including the 401 an unclaimed worker returns before
+      # it has done anything. What matters for this image is that the baked worker is a RECENT one: the
+      # contract changed at v0.4.0 — `lang` became required and has no default — and an image built from
+      # an older tag starts happily, answers Info, and then refuses every command with "lang required".
+      # That is a sandbox that reports itself healthy and cannot run anything.
+      #
+      # So: claim it with the code it prints, read Info for the languages it can actually run, and run a
+      # real program through the engine.
+      - name: the baked worker actually runs a program
+        run: |
+          set -euo pipefail
+          W="http://127.0.0.1:48080"
+
+          # The enrollment code is in the container log; the worker prints it once, unclaimed.
+          code=""
+          for i in $(seq 1 30); do
+            code=$(docker logs sb 2>&1 | sed -n 's/.*enrollment code: \([0-9a-f]\{8,\}\).*/\1/p' | tail -1)
+            [ -n "$code" ] && break
+            sleep 1
+          done
+          if [ -z "$code" ]; then
+            echo "--- the worker did not print an enrollment code; it may already be claimed ---" >&2
+            docker logs sb 2>&1 | grep -i 'claim\|resum\|enroll' | tail -20 >&2 || true
+          fi
+
+          tok=""
+          if [ -n "$code" ]; then
+            tok=$(curl -fsS --max-time 20 -X POST "$W/worker.v1.WorkerEnroll/Claim" \
+                    -H 'Content-Type: application/json' \
+                    -d "{\"code\":\"$code\"}" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+          fi
+          if [ -z "$tok" ]; then
+            echo "no token: cannot verify the worker" >&2
+            exit 1
+          fi
+
+          auth=(-H "Authorization: Bearer $tok" -H 'Content-Type: application/json')
+
+          echo "--- Info ---"
+          info=$(curl -fsS --max-time 20 -X POST "$W/worker.v1.WorkerService/Info" "${auth[@]}" -d '{}')
+          echo "$info"
+          # A WORKER WITH NO USABLE INTERPRETER CANNOT RUN ANYTHING, and that is the state an image built
+          # without bash on PATH would be in. The engine only lists interpreters it RAN a probe with.
+          echo "$info" | grep -q '"interpreters"' || { echo "Info names no interpreters" >&2; exit 1; }
+          echo "$info" | grep -q 'bash' || { echo "the image offers no bash" >&2; exit 1; }
+
+          # AND THE CONTRACT THIS IMAGE IS BUILT FOR: a command without a language is REFUSED, not
+          # guessed. If this returns 200 the baked worker predates v0.4.0 and the image is stale.
+          st=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X POST \
+                 "$W/worker.v1.WorkerService/Execute" "${auth[@]}" -d '{"command":"echo hi"}')
+          [ "$st" = 400 ] || {
+            echo "Execute without lang returned $st; this worker predates v0.4.0" >&2
+            exit 1
+          }
+
+          # A REAL PROGRAM, START TO FINISH, under the language it was written in.
+          job=$(curl -fsS --max-time 20 -X POST "$W/worker.v1.WorkerService/Execute" "${auth[@]}" \
+                  -d '{"command":"echo smoke-ok","lang":"bash"}' | sed -n 's/.*"jobId":"\([^"]*\)".*/\1/p')
+          [ -n "$job" ] || { echo "Execute returned no job id" >&2; exit 1; }
+          echo "job: $job"
+          for i in $(seq 1 30); do
+            out=$(curl -fsS --max-time 20 -X POST "$W/worker.v1.WorkerService/JobOutput" "${auth[@]}" \
+                    -d "{\"jobId\":\"$job\"}")
+            echo "$out" | grep -q 'smoke-ok' && { echo "the baked worker ran a program"; exit 0; }
+            sleep 1
+          done
+          echo "the job never printed smoke-ok: $out" >&2
+          docker logs sb 2>&1 | tail -40 >&2 || true
+          exit 1
+
       - name: screenshot artifact and cleanup
         if: always()
         run: |
